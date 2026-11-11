@@ -10,7 +10,7 @@ import { readdirSync, statSync } from 'node:fs'
 import { cp, lstat, mkdir, readFile, readdir, realpath, rename, rm } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { parseSkillDoc, resolveDshHome, unquote } from '../skills/core.js'
-import { MAX_SOURCE_DEPTH, MAX_DIRECTORIES, MAX_ENTRIES, MAX_DESCRIPTION_LENGTH, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, TRUNCATION_MARKER, DROPPED_HEADING, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, SHARED_GROUP, byteLen, message, isValidGroupSegment } from './constants.js'
+import { MAX_SOURCE_DEPTH, MAX_DIRECTORIES, MAX_ENTRIES, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, TRUNCATION_MARKER, DROPPED_HEADING, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, SHARED_GROUP, byteLen, message, isValidGroupSegment } from './constants.js'
 import { ensureSceneRecords, resolveActiveScenes, signatureOfIndex, sceneLabel, sceneHeading, sceneLine, compareSceneBuckets, memoryBlock } from './projection.js'
 import { isIndexQuarantined, readIndex, writeIndex, pathExists, readFileOrThrowSync, isAbsentError } from './index-io.js'
 import type { RuleIndexEntry } from './index-io.js'
@@ -206,21 +206,9 @@ export async function discover(memoriesRoot: string): Promise<DiscoveryResult> {
   }
   return { entries, shadowed, groups, scenes, warnings, truncated, complete }
 }
-/** 从正文首段派生一句描述（没有正文时返回空串）。 */
-export function deriveDescription(body: string): string {
-  const text = String(body ?? '').trim()
-  if (!text) return ''
-  const heading = /^#\s+(.+)$/m.exec(text)
-  const title = heading?.[1]?.trim()
-  const [firstLine = ''] = text.split(/\r?\n/)
-  const raw = title ? title : firstLine.trim()
-  return raw.slice(0, MAX_DESCRIPTION_LENGTH)
-}
-/** 从 frontmatter 派生出的展示字段（名字、描述、何时用）。 */
+/** 从 frontmatter 派生出的展示字段（名字、何时用、自动记忆元数据）。 */
 export interface DerivedFields {
   name: string
-  description: string
-  descriptionDerived: boolean
   whenToUse?: string
   globs?: string
   metadata?: unknown
@@ -250,16 +238,10 @@ function numberOf(v: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined
 }
 
-/** 由文档派生名字、描述、绑定等字段（声明值优先，缺省时从正文推）。 */
+/** 由文档派生名字、绑定等字段（声明值优先，缺省时从正文推）。 */
 export function deriveFromDoc(entry: DiscoveredEntry, doc: ParsedSkillDoc): DerivedFields {
   const declaredName = doc.map.name != null && String(doc.map.name).trim() !== '' ? unquote(String(doc.map.name)).trim() : ''
   const name = declaredName || entry.name
-  let description = doc.map.description != null ? unquote(String(doc.map.description)).trim() : ''
-  let descriptionDerived = false
-  if (description === '') {
-    description = deriveDescription(doc.body)
-    descriptionDerived = true
-  }
   const globs = doc.map.globs != null && String(doc.map.globs).trim() !== '' ? String(doc.map.globs).trim() : undefined
   let whenToUse: string | undefined
   if (doc.map.whenToUse != null && String(doc.map.whenToUse).trim() !== '') {
@@ -280,7 +262,7 @@ export function deriveFromDoc(entry: DiscoveredEntry, doc: ParsedSkillDoc): Deri
   const autoScene = scalarOf(doc.map.auto_scene)
   const autoBoundary = scalarOf(doc.map.auto_boundary)
   return {
-    name, description, descriptionDerived, whenToUse, globs, metadata,
+    name, whenToUse, globs, metadata,
     // 只在有值时加键：DerivedFields 的形状要与旧版逐字段相同，否则
     // 现有快照/索引的深比较会因为多出 undefined 而报"变了"。
     ...(origin !== undefined ? { origin } : {}),
@@ -315,8 +297,6 @@ export function projectRule(entry: DiscoveredEntry, derived: DerivedFields, idxE
     path: entry.docPath,
     ...(size !== undefined ? { bytes: size } : {}),
     ...(createdAt !== undefined ? { createdAt } : {}),
-    description: derived.description,
-    ...(derived.descriptionDerived ? { descriptionDerived: true } : {}),
     ...(derived.whenToUse !== undefined ? { whenToUse: derived.whenToUse } : {}),
     ...(derived.globs !== undefined ? { globs: derived.globs } : {}),
     ...(derived.metadata !== undefined ? { metadata: derived.metadata } : {}),

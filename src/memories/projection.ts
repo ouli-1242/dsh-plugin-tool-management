@@ -340,19 +340,14 @@ export const bodyBlock = (text: string): string => {
   return ['  ' + fence, ...lines, '  ' + fence].join('\n')
 }
 
-/** 括号注解用的显式描述：派生描述与正文重复、不进段（只存在于界面投影）；换行压成单行，避免把「一行一条」的列表项撑断。 */
-export const explicitDescriptionOf = (f: SceneMemoryFile): string => (
-  f.descriptionDerived || !f.description ? '' : String(f.description).replaceAll(/\s+/g, ' ').trim()
-)
-
 /**
  * 单条信息的渲染形态 —— **能一行就一行，但恒为列表项**。
  *
- *   单行且不长的正文 → `- **名称** (描述) — 正文`（与 MCP / 子智能体两个段的列表同形；无显式描述时括号不出现）
- *   多行或过长的正文 → `- **名称** (描述)` + 空行 + **围栏代码块里的正文**（挂在条目下；理由见 `bodyBlock`）
+ *   单行且不长的正文 → `- **名称** — 正文`（与 MCP / 子智能体两个段的列表同形）
+ *   多行或过长的正文 → `- **名称**` + 空行 + **围栏代码块里的正文**（挂在条目下；理由见 `bodyBlock`）
  *
  * 名称恒为标题：它就是这条记忆的身份（工具 id `<场景>/<名称>`、bundle 目录/文件名都以它为准），
- * 用户说「记忆里的 X」、模型再调 `memory_get` 时都对得上号；显式描述是括号注解，不抢标题。
+ * 用户说「记忆里的 X」、模型再调 `memory_get` 时都对得上号。
  *
  * 为什么全都做成列表项：早先多行正文走 `### 名称` 标题块，附件行只能退化成与记忆**同级**的
  * `- 附件目录：…`（没有父列表项可挂）—— 既可能被读成一条独立记忆，某些渲染器里还会把下一个
@@ -367,9 +362,8 @@ export const explicitDescriptionOf = (f: SceneMemoryFile): string => (
  * 返回值带 `inline`：调用方据此决定下一条记忆前要不要空行（单行条目连续排列，其余空行分隔）。
  */
 export function memoryBlock(file: SceneMemoryFile): { text: string; inline: boolean } {
-  const desc = explicitDescriptionOf(file)
-  // 加粗的只有名称：`- **名称** (描述) — 正文`，与 MCP 段 `- **server**（N 个工具） — …` 同形。
-  const title = `**${file.name}**` + (desc === '' ? '' : ` (${desc})`)
+  // 加粗的只有名称：`- **名称** — 正文`，与 MCP 段 `- **server**（N 个工具） — …` 同形。
+  const title = `**${file.name}**`
   const text = String(file.body ?? '').trim()
   const inline = text === '' || (!text.includes('\n') && text.length <= INLINE_BODY_MAX)
   const head = text === ''

@@ -12,17 +12,16 @@ import { readdirSync, statSync } from 'node:fs'
 import { cp, lstat, mkdir, readFile, readdir, realpath, rename, rm } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { parseSkillDoc, resolveDshHome, unquote } from '../skills/core.js'
-import { MAX_SOURCE_DEPTH, MAX_DIRECTORIES, MAX_ENTRIES, MAX_DESCRIPTION_LENGTH, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, TRUNCATION_MARKER, DROPPED_HEADING, SCENE_MEMORY_NOTE, SCENE_MEMORY_NOTE_PARTIAL, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, SHARED_GROUP, WORKSPACE_GROUP_PREFIX, SESSION_GROUP_PREFIX, LEGACY_AUTO_GROUP, isReservedGroup, byteLen, message, isValidGroupSegment } from './constants.js'
+import { MAX_SOURCE_DEPTH, MAX_DIRECTORIES, MAX_ENTRIES, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, TRUNCATION_MARKER, DROPPED_HEADING, SCENE_MEMORY_NOTE, SCENE_MEMORY_NOTE_PARTIAL, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, SHARED_GROUP, WORKSPACE_GROUP_PREFIX, SESSION_GROUP_PREFIX, LEGACY_AUTO_GROUP, isReservedGroup, byteLen, message, isValidGroupSegment } from './constants.js'
 import { ensureSceneRecords, resolveActiveScenes, signatureOfIndex, sceneLabel, sceneHeading, sceneLine, compareSceneBuckets, memoryBlock } from './projection.js'
 import { isIndexQuarantined, readIndex, writeIndex, pathExists, readFileOrThrowSync, isAbsentError } from './index-io.js'
 import type { RuleIndexEntry } from './index-io.js'
 import type { Rule, GroupRow, SceneMemoryProjection, RulesIndex, SceneMemoryFile } from './service.js'
 
 // 来源发现与投影（扫目录读成条目 / frontmatter 投成规则 / 老布局搬家）整段搬到
-// ./discovery.js，正文一字未改（moved-verify 逐字对拍）。snapshot.js 的公开面照旧：搬走的
-// 九件全部从这里再出口 —— memories/service.ts 按 ./snapshot.js 引它们。
+// ./discovery.js。snapshot.js 的公开面照旧：搬走的这几件全部从这里再出口 ——
+// memories/service.ts 按 ./snapshot.js 引它们。
 export {
-  deriveDescription,
   deriveFromDoc,
   discover,
   identity,
@@ -62,7 +61,7 @@ export interface SceneBlockCandidate {
   block: string
   /** 单行压缩形态（`- **名称** — 正文`）：连续两条可直接相邻，其余情况前空一行。 */
   inline: boolean
-  item: { id: string; scene: string; name: string; description: string; bytes: number }
+  item: { id: string; scene: string; name: string; bytes: number }
 }
 
 // ── 文件工具 ───────────────────────────────────────────────────────────────
@@ -80,8 +79,6 @@ export interface SceneBlockCandidate {
  */
 
 // ── 规则解析 + 派生 ────────────────────────────────────────────────────────
-
-/** 派生 description：首个 `#` 标题 → 首个非空行；截断 500 字符。 */
 
 /** 从 frontmatter/正文派生字段（派生只存在于内存投影，不写回文件）。 */
 
@@ -442,8 +439,6 @@ export function renderSceneMemory(
       id: ref.id,
       scene: ref.scene,
       name: derived.name,
-      description: derived.description,
-      descriptionDerived: derived.descriptionDerived,
       order: ref.order,
       body: doc.body,
       kind: ref.kind,
@@ -486,7 +481,7 @@ export function renderSceneMemory(
         header,
         block,
         inline,
-        item: { id: file.id, scene: file.scene, name: file.name, description: file.description, bytes: byteLen(block) },
+        item: { id: file.id, scene: file.scene, name: file.name, bytes: byteLen(block) },
       })
     }
   }
@@ -637,7 +632,6 @@ export function renderSceneMemory(
       // 与全量块的 `##` 标题逐字一致：全局桶是 `Always-on memories`，其余是 `Scene: <名>`。
       group: c.item.scene === GLOBAL_SCENE ? 'Always-on memories' : `Scene: ${sceneLabelOf(c.item.scene)}`,
       name: c.item.name,
-      description: c.item.description,
       block: c.block,
     })),
   }

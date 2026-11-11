@@ -20,8 +20,8 @@
 // 本身。memory_remember 受 tools/pre-execute 审批门禁。
 // 路径锚点：$DSH_HOME/tool-management/memories/<场景>/…（场景 `global` = 界面「全局」）。
 
-import { GLOBAL_SCENE, MAX_DESCRIPTION_LENGTH, MAX_GROUP_SEGMENT_LENGTH, SHARED_GROUP } from '../memories/constants.js'
-import { MAX_AUTO_DESCRIPTION, MAX_AUTO_TEXT_WIDTH, MAX_AUTO_TITLE_WIDTH } from '../evolution/write.js'
+import { GLOBAL_SCENE, MAX_GROUP_SEGMENT_LENGTH, SHARED_GROUP } from '../memories/constants.js'
+import { MAX_AUTO_TEXT_WIDTH, MAX_AUTO_TITLE_WIDTH } from '../evolution/write.js'
 import { textWidthOf, truncateToWidth } from '../text-width.js'
 import type { ScopeAskRequest, ScopeChoice, ScopeLayer } from '../evolution/scope-card.js'
 import { LIST_LIMIT_MAX, effectiveScope, existingNote, globalActionNote, globalUnchangedNote, isolationOffNote, listLimit, moreNotShown, scopeOnlyNote, scopeSessionDesc, sessionScopeOf, text, toolOrNeutral, type ToolDomainDeps } from './deps.js'
@@ -245,8 +245,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       '- ' + x.id + ' [' + (x.group || 'no scene') + '] ' + label +
       (x.form === 'bundle'
         ? ' · bundle' + (x.attach && x.attach.count ? ' (' + x.attach.count + ' attachment(s))' : '')
-        : '') +
-      (x.description ? ' — ' + x.description : '')
+        : '')
     ))
     const scope = r.activeMode === 'all'
       ? 'every scene (historical default, not narrowed)'
@@ -362,7 +361,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     description: 'Look up user-written memories and agent notes. No id → catalog (what exists and what injects); `id` → full body; `query` → filtered catalog with snippets. Agent note ids start with `note:`. Use this for ids and for entries not already in your context. Read-only.',
     parameters: {
       id: { type: 'string', description: 'Read one entry: a user memory id (<scene>/<name>) or an agent note id (note:...).' },
-      query: { type: 'string', description: 'Filter the catalog by words in id, scene, description, tags or body; every word must match (case-insensitive).' },
+      query: { type: 'string', description: 'Filter the catalog by words in id, scene, tags or body; every word must match (case-insensitive).' },
       kind: { type: 'string', enum: ['memory', 'note'], description: 'Limit the catalog to user-written memories or agent notes.' },
       scene: { type: 'string', description: 'Only user memories in this scene; `global` is the always-on scene.' },
       all: { type: 'boolean', description: 'Catalog only: include entries that are off, in an inactive scene, or archived (default false). Search always covers everything.' },
@@ -503,7 +502,6 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       id: { type: 'string', description: 'Update an existing entry instead of creating: a user memory id (<scene>/<name>) or an agent note id (note:...).' },
       scope: { type: 'string', enum: ['scene', 'global', 'workspace', 'conversation'], description: 'Where it belongs: scene (this working mode), global (every project), workspace (this project, stored as an agent note). Ask the user when unsure.' },
       scene: { type: 'string', description: 'scope=scene: the scene name; defaults to the active scene. `global` is the always-on scene.' },
-      description: { type: 'string', description: 'User memories: one-sentence description; omit to derive from the first line.' },
       nextName: { type: 'string', description: 'User memories: rename the existing memory to this file name.' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
@@ -516,15 +514,14 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       const content = String((args && (args.content !== undefined ? args.content : (args.body !== undefined ? args.body : (args.text !== undefined ? args.text : '')))) || '')
       const title = String((args && args.title) || '').trim()
       const nextName = String((args && args.nextName) || '').trim()
-      const descriptionArg = args && args.description !== undefined ? String(args.description) : undefined
       const scopeArg = String((args && (args.scope !== undefined ? args.scope : args.layer)) || '').trim()
       const sceneArg = String((args && args.scene) || '').trim()
       const slotArg = String((args && (args.slot !== undefined ? args.slot : args.key)) || '').trim()
       const actionArg = String((args && args.action) || '').trim()
 
-      // 删除是用户明确要求时才走的另一条路：只按 id 定位，绝不把同时带来的 content /
-      // description 当成一次更新写回去 —— 真实会话里 `action=forget` + `content` 就把
-      // 一条待删记忆的正文改成了「删」，回执却说更新成功。
+      // 删除是用户明确要求时才走的另一条路：只按 id 定位，绝不把同时带来的 content
+      // 当成一次更新写回去 —— 真实会话里 `action=forget` + `content` 就把一条待删
+      // 记忆的正文改成了「删」，回执却说更新成功。
       if (actionArg !== '' && actionArg !== 'forget') {
         throw new Error('unknown action: ' + actionArg + ' — memory_remember creates or updates; use action=forget with id to delete a user memory.')
       }
@@ -532,8 +529,8 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         if (rawId === '') throw new Error('missing argument: id — the user memory to delete (<scene>/<name>). Agent notes use memory_note action=forget.')
         if (isNoteRef(rawId)) throw new Error('that is an agent note: delete it with memory_note action=forget.')
         if (!rawId.includes('/')) throw new Error('id must be <scene>/<name> (a user memory): ' + rawId)
-        if (content.trim() !== '' || descriptionArg !== undefined || nextName !== '' || title !== '' || slotArg !== '' || scopeArg !== '' || sceneArg !== '') {
-          throw new Error('action=forget deletes by id only: do not pass content, title, description, nextName, scope or scene.')
+        if (content.trim() !== '' || nextName !== '' || title !== '' || slotArg !== '' || scopeArg !== '' || sceneArg !== '') {
+          throw new Error('action=forget deletes by id only: do not pass content, title, nextName, scope or scene.')
         }
         const blocked = await deps.lockedSceneGuard()
         if (blocked) throw new Error(blocked)
@@ -549,9 +546,6 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
 
       /** 就地更新一条已有笔记：id / 层 / 状态不变，正文与标题替换。 */
       const updateNote = async (a: any, ref: string): Promise<string> => {
-        if (descriptionArg !== undefined) {
-          throw new Error('description is for user memories; a note has no description. Use title or content.')
-        }
         if (nextName !== '') throw new Error('nextName is for user memories; a note uses title.')
         const layer = String(a.layer || '')
         if (layer !== 'global' && layer !== 'workspace') {
@@ -642,9 +636,8 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
           payload.body = content
           touched.push('content')
         }
-        if (descriptionArg !== undefined) { payload.description = descriptionArg; touched.push('description') }
         if (nextName !== '') { payload.name = nextName; touched.push('nextName') }
-        if (!touched.length) throw new Error('nothing to change: give content, description, or nextName')
+        if (!touched.length) throw new Error('nothing to change: give content or nextName')
         const r: any = await deps.rulesOps['rules-update'](payload)
         if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to update the memory')
         const rule = r.rule || {}
@@ -656,9 +649,6 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         throw new Error('missing argument: content — what to remember. (The old body / text arguments are now content.)')
       }
       if (nextName !== '') throw new Error('nextName renames an existing memory; to name a new one use title.')
-      if (descriptionArg !== undefined && descriptionArg.length > MAX_DESCRIPTION_LENGTH) {
-        throw new Error('description is too long (limit ' + MAX_DESCRIPTION_LENGTH + ' chars).')
-      }
       const scope = scopeArg !== '' ? scopeArg : (sceneArg !== '' ? 'scene' : '')
       if (scope === '') {
         throw new Error('where should this be remembered? Pass scope=scene (only when this working mode is active), scope=global (every project), or scope=workspace (this project). Ask the user which one; do not guess.')
@@ -684,9 +674,6 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
           layer: 'workspace',
           source: 'user_explicit',
           approved: true,
-        }
-        if (descriptionArg !== undefined && descriptionArg.trim() !== '') {
-          payload.description = descriptionArg.slice(0, MAX_AUTO_DESCRIPTION)
         }
         if (identity?.sessionId) payload.sessionId = identity.sessionId
         if (identity?.cwd) payload.cwd = identity.cwd
@@ -753,7 +740,6 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       }
       const body = content
       const name = slugOf(title !== '' ? title : firstLineOf(body))
-      const description = descriptionArg !== undefined && descriptionArg.trim() !== '' ? descriptionArg : firstLineOf(body)
       const id = group + '/' + name
       const hit = (all.rules || []).find((x: any) => String(x.id) === id)
       if (hit) {
@@ -762,7 +748,6 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         }
         // 同名 upsert：用户说「记住」两次，第二句通常是在改同一条；替换正文而不是再建一条。
         const payload: any = { id, body }
-        if (descriptionArg !== undefined) payload.description = descriptionArg
         const r: any = await deps.rulesOps['rules-update'](payload)
         if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to update the memory')
         return 'OK: updated ' + String((r.rule && r.rule.id) || id) + ' (same name already existed; content replaced)' +
@@ -770,25 +755,22 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       }
       const norm = (value: unknown): string => String(value ?? '').toLowerCase().replace(/\s+/g, ' ').trim()
       const wantName = norm(name)
-      const wantDesc = norm(description)
       const similar: string[] = (all.rules || [])
         .filter((x: any) => !isAutoRule(x))
         .filter((x: any) => {
           const have = norm(x.name)
-          const desc = norm(x.description)
           if (have === wantName) return true
-          if (wantDesc !== '' && desc !== '' && desc === wantDesc) return true
           // 名字互相包含：只在两边都不短于 4 个字符时算，否则 "git" 会把所有条目都匹配上。
           return have.length >= 4 && wantName.length >= 4 && (have.includes(wantName) || wantName.includes(have))
         })
         .map((x: any) => String(x.id))
         .slice(0, 3)
-      const r: any = await deps.rulesOps['rules-create']({ group, name, description, body, enabled: true })
+      const r: any = await deps.rulesOps['rules-create']({ group, name, body, enabled: true })
       if (!r || r.ok === false) throw new Error((r && r.error) || 'failed to create the memory')
       // 刚建好的这条自己会在列表里，从名单里去掉。
       const dup = similar.filter((sid) => sid !== String(r.rule.id))
       const warn = dup.length
-        ? `\nnote: ${dup.length} existing memories have a similar name or description (${dup.join(', ')}) — if it is the same thing, update that one instead of keeping two.`
+        ? `\nnote: ${dup.length} existing memories have a similar name (${dup.join(', ')}) — if it is the same thing, update that one instead of keeping two.`
         : ''
       // 回执必须同时说清**两个**条件：记忆本身已开启（本工具创建时传了 `enabled: true`），
       // 但它落进的场景在这个对话里未必开着 —— 场景没开，单条开关拨上去也不会注入。
@@ -878,9 +860,9 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
 
       if (action !== 'learn') throw new Error('unknown action: ' + action + ' (expected learn / forget)')
 
-      // save 的参数串进来时（`body` / `description` / `memory`），直接指回用户记忆，
+      // save 的参数串进来时（`body` / `memory`），直接指回用户记忆，
       // 别让一次完整记忆被当成一句话笔记丢掉。
-      if (args && (args.body !== undefined || args.description !== undefined || args.memory !== undefined)) {
+      if (args && (args.body !== undefined || args.memory !== undefined)) {
         throw new Error('those are user-memory parameters, not note parameters: for a full memory call memory_remember with content and scope=scene/global. For a note pass title and text (the same slot merges the same meaning and replaces a conflicting note).')
       }
 

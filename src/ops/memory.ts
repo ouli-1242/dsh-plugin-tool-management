@@ -10,11 +10,10 @@ import { lstat, mkdir, readFile, rename, rm } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { parseSkillDoc, unquote } from '../skills/core.js'
 import { expandUploads, planMemoryImport } from '../imports/upload.js'
-import { MAX_DESCRIPTION_LENGTH, MAX_RULE_BYTES, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, GLOBAL_SCENE_LABEL, SHARED_GROUP, MAX_ATTACH_ENTRY_BYTES, MAX_ATTACH_TOTAL_BYTES, MAX_ATTACH_ENTRIES, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, isValidGroupSegment, isValidGroupPath, message, fail } from '../memories/constants.js'
+import { MAX_RULE_BYTES, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, GLOBAL_SCENE_LABEL, SHARED_GROUP, MAX_ATTACH_ENTRY_BYTES, MAX_ATTACH_TOTAL_BYTES, MAX_ATTACH_ENTRIES, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, isValidGroupSegment, isValidGroupPath, message, fail } from '../memories/constants.js'
 import { normalizeActive, enabledSceneOf, sceneOf, sceneLabel, attachmentSummarySync } from '../memories/projection.js'
 import { writeFileAtomically, writeFileAtomicBinary, readIndex, writeIndex, pathExists } from '../memories/index-io.js'
 import type { RuleIndexEntry } from '../memories/index-io.js'
-import { deriveDescription } from '../memories/snapshot.js'
 import type { ParsedSkillDoc } from '../memories/snapshot.js'
 import { stampConflict, stampOfText } from '../stale-write.js'
 import { searchMemories } from '../memories/search.js'
@@ -156,7 +155,6 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {  const { buildProjected, co
         attachments: entry.kind === 'bundle' ? await listAttachments(entry.entryPath, entry.name) : [],
         frontmatter: {
           name: doc.map.name != null ? String(doc.map.name) : undefined,
-          description: doc.map.description != null ? String(doc.map.description) : undefined,
           whenToUse: doc.map.whenToUse != null ? String(doc.map.whenToUse) : undefined,
           globs: doc.map.globs != null ? String(doc.map.globs) : undefined,
           metadata: doc.map.metadata !== undefined ? doc.map.metadata : undefined,
@@ -197,9 +195,6 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {  const { buildProjected, co
       if (rule.shadowed) {
         issues.push({ severity: 'warning', code: 'shadowed', ruleId: rule.id, message: `规则「${rule.id}」被同名 bundle 遮蔽，不会被加载。` })
       }
-      if (String(rule.description || '').length > MAX_DESCRIPTION_LENGTH) {
-        issues.push({ severity: 'error', code: 'descriptionTooLong', ruleId: rule.id, message: `规则「${rule.id}」描述超过 ${MAX_DESCRIPTION_LENGTH} 字符，会被列表与检索截断。` })
-      }
       if (rule.form === 'flat') {
         const fileBase = basename(rule.path)
         const base = fileBase.toLowerCase().endsWith('.md') ? fileBase.slice(0, -3) : fileBase
@@ -210,9 +205,6 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {  const { buildProjected, co
       const body = snap.bodies.get(rule.id) || ''
       if (body.trim() === '') {
         issues.push({ severity: 'error', code: 'emptyBody', ruleId: rule.id, message: `规则「${rule.id}」正文为空。` })
-      }
-      if (rule.descriptionDerived && String(rule.description || '').length < 10) {
-        issues.push({ severity: 'info', code: 'vagueDescription', ruleId: rule.id, message: `规则「${rule.id}」描述过于笼统（自动派生，不足 10 字符），建议补充。` })
       }
       // 记忆所在场景未启用 → 不会自动生效（不是错误，但值得提示，避免"改了没效果"）。
       const scene = sceneOf(rule.group)
@@ -292,22 +284,12 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {  const { buildProjected, co
     const body = String((args && args.body) ?? '')
     if (body.trim() === '') return fail('error.rules.bodyRequired', '规则正文不能为空')
     if (Buffer.byteLength(body, 'utf8') > MAX_RULE_BYTES) return fail('error.rules.tooLarge', `规则正文过大（超过 ${MAX_RULE_BYTES >> 10} KiB）`)
-    let description: string | undefined
-    const rawDescription = args && args.description != null ? String(args.description).trim() : ''
-    if (rawDescription !== '') {
-      if (rawDescription.length > MAX_DESCRIPTION_LENGTH) {
-        return fail('error.rules.descriptionTooLong', `描述超过 ${MAX_DESCRIPTION_LENGTH} 字符（当前 ${rawDescription.length}）`)
-      }
-      description = rawDescription
-    } else {
-      const derived = deriveDescription(body)
-      if (!derived) return fail('error.rules.descriptionRequired', '请提供规则描述（正文中也无可派生的标题或首行）')
-      description = derived // 派生只进内存投影，不写回文件
-    }
     // 正文序列化（frontmatter 仅写用户显式提供的字段）。是否生效由"场景是否启用"决定，
     // 超预算只在渲染时确定性截断 + 告警，不再拒绝写入。
+    //
+    // 不写 `description`：它只是正文的有损副本（首行 / 首个标题），而正文本身就会注入，
+    // 副本既多一份会过期的数据，也让「改正文但忘了改描述」变成一种静默不一致。
     const fields: Record<string, string | boolean> = { name }
-    if (rawDescription !== '') fields.description = description!
     const text = serializeRuleFile(fields, body)
     // 更新索引（force 重读后合并，避免覆盖用户手工编辑）。
     // id 恒为 `<场景>/<名>`（与 parseId 同构）；场景记录此时必然已存在。
@@ -491,34 +473,12 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {  const { buildProjected, co
     const newBody = args && args.body != null ? String(args.body) : doc.body
     if (newBody.trim() === '') return fail('error.rules.bodyRequired', '规则正文不能为空')
     if (Buffer.byteLength(newBody, 'utf8') > MAX_RULE_BYTES) return fail('error.rules.tooLarge', `规则正文过大（超过 ${MAX_RULE_BYTES >> 10} KiB）`)
-    // description：显式传 → 校验并写文件；传空串 → 删除字段并从正文派生；未传 → 保留现有（缺失则派生）。
-    let description: string | undefined
-    if (args && args.description != null) {
-      const ds = String(args.description).trim()
-      if (ds !== '') {
-        if (ds.length > MAX_DESCRIPTION_LENGTH) {
-          return fail('error.rules.descriptionTooLong', `描述超过 ${MAX_DESCRIPTION_LENGTH} 字符（当前 ${ds.length}）`)
-        }
-        description = ds
-      } else {
-        const derived = deriveDescription(newBody)
-        if (!derived) return fail('error.rules.descriptionRequired', '请提供规则描述（正文中也无可派生的标题或首行）')
-        description = derived // 派生不写回
-      }
-    } else {
-      const existing = doc.map.description != null ? unquote(String(doc.map.description)).trim() : ''
-      if (existing !== '') description = existing
-      else description = deriveDescription(newBody) || undefined
-    }
     // 形态转换 / 改名：先建新形态文件，再把旧形态复制进回收站、最后删原件
     // （确保任意失败点不产生半份规则；旧形态随时可恢复，README「删除都进回收站」无例外）。
-    // description 写回约定：显式传 → string/null（删除）；未传 → undefined（保留原字段）。
-    const serialize = (): string => {
-      let descArg: string | undefined | null
-      if (args && args.description != null) descArg = String(args.description).trim() === '' ? null : description
-      else descArg = undefined
-      return serializeUpdatedFile(text, newName, descArg, newBody)
-    }
+    //
+    // 不碰 `description`：那是正文的有损副本，新版不再读写它。旧文件里残留的那一行
+    // 原样留着（用户资产，删字段不该顺手改正文），读侧已忽略。
+    const serialize = (): string => serializeUpdatedFile(text, newName, newBody)
     // 所有写入 / 删除分支的落点都在 `<root>/<group>` 之下：先确认这个目录（经 realpath）仍在根内。
     const denied = await refuseOutsideRoot(join(memoriesRoot, parts.group))
     if (denied) return denied
@@ -722,7 +682,6 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {  const { buildProjected, co
         id: r.id,
         name: r.name,
         group: r.group,
-        description: r.description || '',
         tags: Array.isArray(r.tags) ? r.tags : [],
         body: snap.bodies.get(r.id) || '',
         enabled: typeof over === 'boolean' ? over : r.enabled,

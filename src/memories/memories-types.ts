@@ -61,8 +61,6 @@ export interface Rule {
   form: 'flat' | 'bundle'
   /** 规则文件绝对路径（flat= .md；bundle= <名>.md，旧数据可能是 SKILL.md）。 */
   path: string
-  description: string
-  descriptionDerived?: boolean
   whenToUse?: string
   globs?: string
   metadata?: unknown
@@ -152,7 +150,7 @@ export interface SceneMemoryProjection {
   /** 因超出预算**未**注入的记忆（确定性顺序；段尾也会列出它们，模型与用户都能看见）。 */
   dropped: Array<{ id: string; scene: string; name: string; bytes: number }>
   /** 实际注入的条目块（顺序与正文一致）；增量注入按 `id` 做差集。 */
-  blocks: Array<{ id: string; scene: string; group: string; name: string; description: string; block: string }>
+  blocks: Array<{ id: string; scene: string; group: string; name: string; block: string }>
 }
 
 /** 当前生效的场景提示词投影（供注入兜底与只读状态展示）。 */
@@ -407,8 +405,6 @@ export interface SceneMemoryFile {
   /** 一级目录名；`''` = 规则根目录下的全局记忆，`_shared` = 公共基线。 */
   scene: string
   name: string
-  description: string
-  descriptionDerived: boolean
   order: number
   body: string
   /** `bundle` = 目录形态（正文是 `<名>.md`，同目录其余文件是附件）；`flat` = 单个 .md。 */

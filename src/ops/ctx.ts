@@ -50,7 +50,7 @@ export interface MemoriesOpsCtx {
   copyIntoMemoriesTrash(located: DiscoveredEntry, group: string, name: string): Promise<string>
   listAttachments(bundleDir: string, name: string): Promise<Array<{ name: string; size: number }>>
   serializeRuleFile(fields: Record<string, string | boolean>, body: string): string
-  serializeUpdatedFile(text: string, newName: string, description: string | undefined | null, body: string): string
+  serializeUpdatedFile(text: string, newName: string, body: string): string
   ensureLayout(): Promise<void>
   presetExistsSync(id: string): boolean
 }

@@ -5,7 +5,7 @@
 //
 // 判据（刻意保持"可解释"）：
 //   · 多词 AND：每个词都要在某个字段里出现（大小写不敏感），不做 OR 兜底；
-//   · 排序：名称精确 > 名称前缀 > 名称包含 > 描述 > 标签 > 正文，多词累加；
+//   · 排序：名称精确 > 名称前缀 > 名称包含 > id > 标签 > 正文，多词累加；
 //   · 返回片段而不是全文：模型一次调用的预算有限，全文交给 `rules-read`。
 /** 检索用的一条文档：记忆与场景共用同一形状。 */
 export interface SearchDoc {
@@ -13,7 +13,6 @@ export interface SearchDoc {
   name: string
   /** 场景（记忆的一级归属）。 */
   group: string
-  description: string
   tags: string[]
   body: string
   /** 会话投影后的生效值（调用方负责合成）。 */
@@ -27,7 +26,6 @@ export interface SearchHit {
   id: string
   scene: string
   name: string
-  description: string
   enabled: boolean
   origin?: 'user' | 'auto'
   score: number
@@ -46,7 +44,6 @@ function termScore(term: string, doc: SearchDoc): number {
   if (name.startsWith(term)) return 60
   if (name.includes(term)) return 40
   if (id.includes(term)) return 30
-  if (doc.description.toLowerCase().includes(term)) return 20
   if (doc.tags.some((tag) => String(tag).toLowerCase().includes(term))) return 15
   if (doc.body.toLowerCase().includes(term)) return 10
   return 0
@@ -91,14 +88,13 @@ export function searchMemories(docs: SearchDoc[], query: string, limit?: number)
       score += s
     }
     if (!matchedAll) continue
-    // 片段优先取正文（信息量最大），正文没命中时退回描述。
+    // 片段优先取正文（信息量最大）；只在名称/标签上命中时退回名称，别把命中词藏起来。
     const bodyHit = terms.some((t) => doc.body.toLowerCase().includes(t))
-    const snippet = bodyHit ? snippetOf(doc.body, terms) : snippetOf(doc.description, terms)
+    const snippet = bodyHit ? snippetOf(doc.body, terms) : snippetOf(doc.name, terms)
     hits.push({
       id: doc.id,
       scene: doc.group,
       name: doc.name,
-      description: doc.description,
       enabled: doc.enabled,
       ...(doc.origin !== undefined ? { origin: doc.origin } : {}),
       score,

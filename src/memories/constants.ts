@@ -15,7 +15,8 @@ export const MAX_SOURCE_DEPTH = 64          // 与 core.js 一致
 export const MAX_DIRECTORIES = 2000         // 目录预算
 export const MAX_ENTRIES = 20000            // 条目预算
 export const MAX_GROUP_SEGMENT_LENGTH = 64  // 场景/子目录段名长度上限
-export const MAX_DESCRIPTION_LENGTH = 500   // 派生/显式描述上限（派生超长截断，显式超长拒绝）
+/** 场景说明上限（场景段的 `user description:` 与界面共用）。 */
+export const MAX_DESCRIPTION_LENGTH = 500
 export const MAX_RULE_BYTES = 1 << 18       // 正文上限 256 KiB
 export const DEFAULT_ORDER = 1000           // 默认投影 order（索引无记录时）
 export const DEFAULT_GROUP_ORDER = 1000     // 新场景默认 order

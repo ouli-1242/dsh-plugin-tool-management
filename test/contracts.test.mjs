@@ -4879,9 +4879,9 @@ test('stale-write：指纹随内容变、不带指纹不拦、不符给出冲突
 
 test('记忆搜索：多词 AND、大小写不敏感、排序按命中字段、空 query 不返回全部', () => {
   const docs = [
-    { id: 'global/deploy', name: 'deploy', group: 'global', description: 'how to ship', tags: ['ops'], body: 'run the deploy script', enabled: true },
-    { id: 'global/deploy-notes', name: 'deploy-notes', group: 'global', description: 'deploy details', tags: [], body: 'notes about shipping', enabled: false },
-    { id: 'work/incident', name: 'incident', group: 'work', description: 'deploy rollback', tags: ['deploy'], body: 'when a deploy fails', enabled: true },
+    { id: 'global/deploy', name: 'deploy', group: 'global', tags: ['ops'], body: 'run the deploy script', enabled: true },
+    { id: 'global/deploy-notes', name: 'deploy-notes', group: 'global', tags: [], body: 'notes about shipping', enabled: false },
+    { id: 'work/incident', name: 'incident', group: 'work', tags: ['deploy'], body: 'when a deploy rollback fails', enabled: true },
   ]
   assert.deepEqual(searchMemories(docs, ''), [], '空 query 返回空，不是全部')
   assert.deepEqual(searchMemories(docs, '   '), [], '纯空白同理')
@@ -4890,7 +4890,8 @@ test('记忆搜索：多词 AND、大小写不敏感、排序按命中字段、�
   assert.equal(hits.length, 3)
   assert.equal(hits[0].name, 'deploy', '名称精确排第一')
   assert.equal(hits[1].name, 'deploy-notes', '名称前缀排第二')
-  assert.equal(hits[2].name, 'incident', '只在描述 / 标签 / 正文命中的排后面')
+  assert.equal(hits[2].name, 'incident', '只在标签 / 正文命中的排后面')
+  assert.equal('description' in hits[0], false, '命中不再带描述：记忆只有名称与正文')
 
   assert.equal(searchMemories(docs, 'DEPLOY').length, 3, '大小写不敏感')
   assert.deepEqual(searchMemories(docs, 'deploy rollback').map((h) => h.name), ['incident'], '多词是 AND')

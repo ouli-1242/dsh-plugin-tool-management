@@ -56,7 +56,8 @@ export type {
 //   - 不再写 ~/.dsh/AGENTS.md（原始终层投影下线）
 //
 // 状态分层（两份文件各司其职，互不写回）：
-//   - 规则文件：正文真源。frontmatter 可声明 name/description/whenToUse/globs/metadata。
+//   - 规则文件：正文真源。frontmatter 可声明 name/whenToUse/globs/metadata（旧数据里的
+//     `description` 不再读：它只是正文的有损副本，而正文本身就会注入）。
 //   - memories-index.json：启停/排序/标签/启用场景集合等**索引为准**字段（不写回记忆文件）。
 //
 // 发现必须自实现（不复用 readonly-discovery）：可写来源只扫一层会压扁子目录场景，
@@ -97,14 +98,14 @@ export { parseModeState } from './index-io.js'
 // 投影 / 渲染纯函数（抽到 ./projection.ts）：索引 → 界面与注入看到的那份文本。
 import {
   attachmentLine, attachmentNamesSync, attachmentSummarySync, collapseActiveForNewScene,
-  compareSceneBuckets, enabledSceneOf, ensureSceneRecords, explicitDescriptionOf,
+  compareSceneBuckets, enabledSceneOf, ensureSceneRecords,
   bodyBlock, memoryBlock, normalizeActive, resolveActiveScenes, sceneHeading, sceneLabel,
   sceneOf, sceneOrderOf, signatureOfIndex,
 } from './projection.js'
 // 索引 IO 组与发现/快照组（抽出）。
 import { writeFileAtomically, writeFileAtomicBinary, isIndexQuarantined, readIndex, readIndexSync, writeIndex, repairFromQuarantine, sceneRecordOf, normalizeScenePromptId, pathExists, isAbsentError } from './index-io.js'
 import type { SceneIndexEntry, RuleIndexEntry, GroupIndexEntry } from './index-io.js'
-import { deriveDescription, deriveFromDoc, projectRule, relocateLegacyLayout, buildSnapshot, probeSceneFilesSync, renderSceneCatalog, renderSceneMemory } from './snapshot.js'
+import { deriveFromDoc, projectRule, relocateLegacyLayout, buildSnapshot, probeSceneFilesSync, renderSceneCatalog, renderSceneMemory } from './snapshot.js'
 import { buildCatalog, catalogPathOf } from './catalog.js'
 import { autoNotesRootOf, migrateLegacyAutoNotes } from '../evolution/notes.js'
 import { watchDirectories } from '../skills/dir-watch.js'
@@ -671,14 +672,11 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   }
 
   /**
-   * update 时重写文件：只替换 name / description 的取值行，其余字段、嵌套、注释与顺序逐字保留。
-   * `description === undefined` 表示保留原值，`null` 表示删除该字段。
+   * update 时重写文件：只替换 name 的取值行，其余字段、嵌套、注释与顺序逐字保留。
+   * 盘上残留的旧 `description:` 行**不主动删**：记忆文件是用户资产，读侧已忽略它。
    */
-  function serializeUpdatedFile(text: string, newName: string, description: string | undefined | null, body: string): string {
-    const updates: Record<string, string | null | undefined> = { name: newName }
-    if (description === null) updates.description = null
-    else if (description !== undefined) updates.description = description
-    return rewriteFrontmatterFields(text, updates, body)
+  function serializeUpdatedFile(text: string, newName: string, body: string): string {
+    return rewriteFrontmatterFields(text, { name: newName }, body)
   }
 
   /**

@@ -4777,8 +4777,7 @@ export default {
           .filter((r) => !r.shadowed && r.enabled !== false)
           .map((r) => {
             const body = (snap.bodies.get(r.id) ?? '').replaceAll(/\s+/g, ' ').trim().slice(0, 120)
-            const desc = String(r.description ?? '').trim()
-            return '[user memory] ' + r.name + (desc !== '' ? ' — ' + desc : body !== '' ? ' — ' + body : '')
+            return '[user memory] ' + r.name + (body !== '' ? ' — ' + body : '')
           })
       } catch {
         // 读不动就不列：宁可让模型多看一遍原文，也不要让一次复习因为清单失败而整段跳过。
