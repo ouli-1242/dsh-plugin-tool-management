@@ -858,12 +858,12 @@ test('update：只换正文，catalog 摘要跟着变；frontmatter / 状态不�
     assert.match(doc, /统一用 pnpm，不要用 npm/)
     assert.equal(pickField(doc, 'auto_key'), 'package-manager', '编辑不能动 frontmatter 身份')
     assert.equal(pickField(doc, 'auto_status'), 'candidate', '编辑不改状态')
-    assert.equal(pickField(doc, 'description'), '这个仓库统一用 pnpm，不要用 npm', 'description 也要跟着正文走')
+    assert.equal(pickField(doc, 'description'), '', '不再写 description：注入行直接取正文')
     const after = h.readCatalog().entries[r.id]
     assert.equal(after.oneLine, '这个仓库统一用 pnpm，不要用 npm')
     assert.ok(after.estTokens > 0)
     assert.notEqual(after.oneLine, before.oneLine)
-    // catalog 重建后摘要不能退回旧说法（description 已同步）
+    // catalog 重建后摘要不能退回旧说法
     const rebuilt = await buildCatalog(h.memoriesRoot, h.readIndex())
     assert.equal(rebuilt.entries[r.id].oneLine, '这个仓库统一用 pnpm，不要用 npm')
 

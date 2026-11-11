@@ -140,7 +140,9 @@ export async function buildCatalog(memoriesRoot: string, index: RulesIndex): Pro
     if (!isAutoOrigin(derived.origin, layer)) continue
     const idx = index.rules[entry.id]
     const { workspace, session } = ownerOf(entry.group)
-    const oneLine = oneLineOf(derived.description || doc.body)
+    // 注入行直接取正文：不再读 `description`（那是正文的有损副本，改了正文就得重算，
+    // 而它永远不如正文本身准）。
+    const oneLine = oneLineOf(doc.body)
     const bytes = Buffer.byteLength(oneLine, 'utf8')
     // `auto_title` 是 P4 才有的字段；旧条目没有时留空，注入侧会退回 key / 文件名。
     const autoTitle = typeof doc.map.auto_title === 'string' ? String(doc.map.auto_title).trim() : ''

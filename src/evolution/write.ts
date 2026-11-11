@@ -17,7 +17,7 @@ import { appendFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { hubPath } from '../hub.js'
 import { writeFileAtomically, readIndex, writeIndex } from '../memories/index-io.js'
-import { catalogEntryOf, catalogPathOf, estimateTokens, normalizeCatalog, type CatalogFile } from '../memories/catalog.js'
+import { catalogEntryOf, catalogPathOf, estimateTokens, normalizeCatalog, oneLineOf, type CatalogFile } from '../memories/catalog.js'
 import {
   GLOBAL_SCENE, LAYER_GLOBAL, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE, SHARED_GROUP,
   isValidGroupPath, isValidGroupSegment, layerOfGroup, type MemoryLayer,
@@ -48,8 +48,6 @@ import {
 export const MAX_AUTO_TEXT_WIDTH = 800
 /** 名称上限（显示宽度）：80 单位 = 40 汉字 / 80 字母；列表一行要放得下。 */
 export const MAX_AUTO_TITLE_WIDTH = 80
-/** 描述上限（与 `MAX_DESCRIPTION_LENGTH` 一致，但这里更紧：注入只显示一行）。 */
-export const MAX_AUTO_DESCRIPTION = 200
 /** `boundary` 上限：合并时会追加，靠它兜住长度。 */
 const MAX_BOUNDARY = 500
 /**
@@ -71,7 +69,6 @@ export interface LearnRequest {
   layer?: MemoryLayer
   boundary?: string
   ttlDays?: number
-  description?: string
   /** 用户在对话卡片上批准了这条原文：直接生效，但用户手写记忆的冲突仍然只进 candidate。 */
   approved?: boolean
   /** 按自动生效策略直接落 active（工作区 + 强证据 + 非做法类）。 */
@@ -205,15 +202,6 @@ export function slugOf(key: string): string {
   // 非全局正则会直接抛 TypeError —— 症状是每一次 learn 都失败，回执只有一句 `learn-failed`。
   const clipped = s.slice(0, 48).replace(/-$/, '')
   return clipped === '' ? 'note' : clipped
-}
-
-/** 描述：显式给的优先，否则取正文首句（到第一个句号 / 换行）。 */
-export function describeOf(text: string, explicit?: string): string {
-  const given = String(explicit ?? '').trim()
-  if (given !== '') return given.slice(0, MAX_AUTO_DESCRIPTION)
-  const cut = String(text ?? '').split(/[。\n]/, 1)[0]?.trim() ?? ''
-  const base = cut === '' ? String(text ?? '').trim() : cut
-  return base.slice(0, MAX_AUTO_DESCRIPTION)
 }
 
 /** 名称：显式给的优先，空白视为没有。 */
@@ -472,7 +460,6 @@ export function createLearner(deps: LearnDeps) {
     const fields: Record<string, string | boolean> = {
       name,
       ...(title !== '' ? { auto_title: title } : {}),
-      description: describeOf(pass.text, req.description),
       origin: 'auto',
       auto_kind: pass.kind,
       auto_key: pass.key,
@@ -749,7 +736,8 @@ export function createLearner(deps: LearnDeps) {
     }
     const prev = catalog.entries[id]
     // 合并路径保留原来的摘要与标题；目标还没有标题时，用本次请求补一个。
-    const oneLine = prev?.oneLine ?? describeOf(pass.text, req.description)
+    // 摘要直接取正文：不再走 `describeOf`（那是正文的有损副本，且已不再写盘）。
+    const oneLine = prev?.oneLine ?? oneLineOf(pass.text)
     const title = prev?.title || titleOf(req.title)
     // 边界：编辑路径显式给（正文里的边界行变了）；新建取本次请求；合并时目标文件里的
     // `auto_boundary` 没被动过，保留旧值。
@@ -1343,7 +1331,6 @@ export function createLearner(deps: LearnDeps) {
       status: pickField(text, 'auto_status') || 'active',
       kind: pickField(text, 'auto_kind') || '',
       key: pickField(text, 'auto_key') || '',
-      description: pickField(text, 'description') || '',
       title: pickField(text, 'auto_title') || '',
       basis: pickField(text, 'auto_basis') || '',
       boundary: pickField(text, 'auto_boundary') || '',
@@ -1436,19 +1423,18 @@ export function createLearner(deps: LearnDeps) {
       if (current === 'superseded') {
         return { ok: false, code: 'superseded', error: `refused: "${id}" was replaced by a newer memory; editing it would have no effect.` }
       }
-      const oneLine = describeOf(body)
+      const oneLine = oneLineOf(body)
       // `undefined` = 这次不动名称；空串 = 用户清空了名称（删掉字段，列表按首句兜底）。
       const nextTitle = title === undefined ? undefined : titleOf(title)
       // 边界行（`边界：…` / `Boundary: …`）是正文的一部分，注入行另从 `auto_boundary` 读。
       // 两处必须同源：用户在这里删掉 / 改写那一行，frontmatter 不跟着变的话，注入会继续
       // 显示用户刚删掉的条件 —— 而界面的正文里已经没有了。
       const nextBoundary = boundaryOfBody(body)
-      // description 是 catalog 重建时的一行摘要来源：只改正文不写它，下一次重建就会
-      // 把列表与注入行退回到旧说法。
+      // 不写 `description`：它是正文的有损副本，catalog 现在直接从正文生成注入行。
+      // 旧文件里残留的那一行读侧已忽略，这里也不顺手删（记忆文件是用户资产）。
       const next = rewriteFrontmatterFields(
         raw,
         {
-          description: oneLine,
           auto_updated: new Date().toISOString(),
           auto_boundary: nextBoundary === '' ? null : nextBoundary,
           ...(nextTitle !== undefined ? { auto_title: nextTitle === '' ? null : nextTitle } : {}),
