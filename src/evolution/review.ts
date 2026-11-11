@@ -121,7 +121,9 @@ export function parseReviewItems(raw: unknown): ReviewItem[] {
  * 当成引句来源。
  */
 export function buildReviewPrompt(episode: Episode, catalogLines: string[]): string {
-  const known = catalogLines.slice(0, 80)
+  // 上限比旧版宽：清单里现在混着用户记忆与全局指令文件，截到 80 行会让后加的自主笔记
+  // 整段消失，而「别重复」恰恰最需要它们。
+  const known = catalogLines.slice(0, 160)
   const lines: string[] = []
   if (typeof episode.checkpoint === 'string' && episode.checkpoint.trim() !== '') {
     lines.push('## Host-compiled checkpoint (a summary written by another model, not the user\'s words)')
@@ -139,19 +141,29 @@ export function buildReviewPrompt(episode: Episode, catalogLines: string[]): str
       lines.push(tools.join('\n'))
     }
   }
-  lines.push('', '## 已经记住的东西（不要重复记）')
+  // 标题点名「已经在上下文里」而不只是「已经记住」：清单里除了自主记忆，还有用户手写的
+  // 记忆与全局指令文件的摘录 —— 它们本来就会注入每一次对话，再学一遍就是同一句话在上下文
+  // 里出现两次，还多一条要维护的副本。
+  lines.push('', '## 已经记住 / 已经在上下文里的东西（不要重复记）')
   lines.push(known.length ? known.map((x) => '- ' + x).join('\n') : '(nothing yet)')
   lines.push('', '## 输出')
   lines.push('只输出 JSON，不要解释。没有值得记的就返回 {"memories":[]}。')
   return lines.join('\n')
 }
 
-/** 压缩复习专用：checkpoint 里大半是「接着干活」的任务态，只有这一小类跨会话成立。 */
+/**
+ * 压缩复习专用：checkpoint 里大半是「接着干活」的任务态，只有这一小类跨会话成立。
+ *
+ * 最后一句是**去重**的一半：清单里已经列了用户手写记忆与全局指令文件的摘录，它们每一次
+ * 对话都会注入。不点名这件事，模型会照着 checkpoint 里的说法再写一条几乎一样的笔记
+ * （真实数据：「gh cli已经登录」被重学成「GitHub CLI 已登录」）。
+ */
 const CHECKPOINT_FILTER = [
   'The input is a host-compiled conversation checkpoint meant for resuming the current task, not for long-term memory.',
   'Keep ONLY what will still be true in a different conversation: user preferences, corrections of your behaviour, durable constraints, project facts that cannot be read from the code, and repeatable procedures.',
   'DISCARD everything task-local: Current Work, Next Step, Pending Jobs, Files and Code, Errors and Fixes, file paths, commands, error strings, dependency versions, and one-off instructions.',
   'The checkpoint is a paraphrase, not the user\'s words: never invent a `quote`; set `source` to "model_inference".',
+  'The list at the end of the user message holds what is ALREADY in every conversation (the user\'s own memories and their global instructions, not just earlier notes). Do not restate any of it in other words — only add what that list does not already say.',
 ].join(' ')
 
 /** 旧版按轮次复习的提示：那份 episode 里是用户逐字原话，可以要求引句核对。 */

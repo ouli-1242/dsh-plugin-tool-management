@@ -4764,6 +4764,47 @@ export default {
       max: DEFAULT_EVOLUTION_SETTINGS.maxReviewsPerSession,
       message,
     })
+    /**
+     * 用户手写记忆的一行摘要（只取**会注入**的那些：未遮蔽 + 已启用）。
+     *
+     * 复习器拿它当「别重复记」的清单。只列自主笔记时，模型会把用户写过的记忆照 checkpoint
+     * 再说一遍 —— 同一条事实于是在每次对话里出现两次，还多一份要跟着改的副本。
+     */
+    async function userMemoryLines(): Promise<string[]> {
+      try {
+        const snap = await memoriesService.autoAccess.snapshot()
+        return snap.rules
+          .filter((r) => !r.shadowed && r.enabled !== false)
+          .map((r) => {
+            const body = (snap.bodies.get(r.id) ?? '').replaceAll(/\s+/g, ' ').trim().slice(0, 120)
+            const desc = String(r.description ?? '').trim()
+            return '[user memory] ' + r.name + (desc !== '' ? ' — ' + desc : body !== '' ? ' — ' + body : '')
+          })
+      } catch {
+        // 读不动就不列：宁可让模型多看一遍原文，也不要让一次复习因为清单失败而整段跳过。
+        return []
+      }
+    }
+
+    /**
+     * 全局指令文件（`~/.dsh/AGENTS.md`）的正文行。
+     *
+     * 它同样每一次对话都在上下文里。整份文件可能很长，只取前若干行 —— 复习提示里这一节是
+     * 给模型"别重复"的参考，不是让它逐条对照原文。
+     */
+    function globalInstructionLines(): string[] {
+      try {
+        return memoriesService.promptBaselineText()
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line !== '' && !line.startsWith('#'))
+          .slice(0, 40)
+          .map((line) => '[global instructions] ' + line.slice(0, 160))
+      } catch {
+        return []
+      }
+    }
+
     const reviewer = createReviewer({
       llm: (() => {
         try { return typeof (ctx as any).get === 'function' ? (ctx as any).get('llm') : undefined } catch { return undefined }
@@ -4774,10 +4815,15 @@ export default {
         const view = evolutionRuntime.view()
         // 已知清单要含候选：复习器看不到待确认的条目时，会把同一件事再学一遍，
         // 收件箱里就出现两条几乎一样的候选。
-        return Object.values(view.catalog.entries)
+        const notes = Object.values(view.catalog.entries)
           .filter((e) => e.enabled && e.status !== 'archived' && e.status !== 'superseded')
           .sort((a, b) => b.confidence - a.confidence)
-          .map((e) => '[' + e.layer + '] ' + e.oneLine)
+          .map((e) => '[note] ' + e.oneLine)
+        // 用户手写的记忆与全局指令文件**本来就会注入每一次对话**。只报自主笔记的话，模型会
+        // 照着 checkpoint 把它们再写一遍（真实数据：「gh cli已经登录」被重学成
+        // 「GitHub CLI 已登录」），同一条事实于是在上下文里出现两次，还多一份要维护的副本。
+        const already = [...(await userMemoryLines()), ...globalInstructionLines()]
+        return [...already, ...notes]
       },
       log: evolutionLog,
       message,
