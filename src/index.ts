@@ -2081,7 +2081,7 @@ export default {
     // 用的那一刻，与原闭包同形，既不撞 TDZ 也不动搬走的那些行。
     const {
       toolTableSizes, toolTableSummaries, recordToolSize, readToolTableSettings, toolTableState, toolTableWriteError, toolTableHidden,
-      mutateToolTableSettings, toolTableReport, toolTableOp,
+      mutateToolTableSettings, toolTableReport, toolTableOp, repairToolTable,
     } = createToolTableSwitch({
       ensurePaths, readJsonFileStrict, writeJsonFile, withWriteLock, message, EMPTY_TOOL_SET,
       proactiveMemoryEnabled: () => proactiveMemoryGlobalOn(),
@@ -5017,6 +5017,7 @@ export default {
         injectSettingsOp,
         readSlashSettings,
         toolTableOp: (args: any) => toolTableOpWithScope(args),
+        repairToolTable: () => repairToolTable(),
         toolTableReport: () => toolTableReport([...withProactiveTool(toolTableHidden())]),
         // 先读一次：预热前 state 是乐观的 'ok'，而这一行要回答的是"文件现在能不能读"。
         toolTableState: async () => { await readToolTableSettings(); return toolTableState() },
@@ -6084,6 +6085,7 @@ export default {
       repair: async (kind) => {
         if (kind === 'memory-index') return await auditFn('memories-index-repair', (a: any) => memoriesService.ops['memories-index-repair'](a))({})
         if (kind === 'scope') return await auditFn('scope-repair', (a: any) => handlers['scope-repair'](a))({})
+        if (kind === 'tool-table') return await auditFn('tool-table-repair', (a: any) => handlers['tool-table-repair'](a))({})
         return await auditFn('mcpm-disabled-reset', (a: any) => mcp.ops['mcpm-disabled-reset'](a))({})
       },
     })

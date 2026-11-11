@@ -48,11 +48,15 @@ export interface ControlToolDeps extends ToolDomainDeps {
   /**
    * 修复类动作：把**已损坏**的侧车改名留存、按空表继续。
    *
-   * 这三个 op 在登记表里刻意**不冻结**（恢复路径不能被场景锁挡在门外），但模型此前
+   * 这四个 op 在登记表里刻意**不冻结**（恢复路径不能被场景锁挡在门外），但模型此前
    * 根本没有入口 —— 侧车一坏，模型手里的写操作全被拒，而它一个出口都没有。
    * 破坏性（原始文件被改名留存），所以走确认卡（判据在 `src/confirm-gate.ts`）。
+   *
+   * `tool-table` 与另外三个不同：它的目标不是"按空表继续"而是**按出厂名单**继续 ——
+   * 工具表读不出来的空表会让所有工具都可见（与出厂默认相反），所以恢复值取
+   * `DEFAULT_HIDDEN_TOOLS`。
    */
-  repair(kind: 'memory-index' | 'scope' | 'mcp-disabled'): Promise<{ ok: boolean; error?: string; message?: string }>
+  repair(kind: 'memory-index' | 'scope' | 'mcp-disabled' | 'tool-table'): Promise<{ ok: boolean; error?: string; message?: string }>
 }
 
 /** 一行清单：名字 · 用途 · ≈token。 */
@@ -97,8 +101,8 @@ export function buildControlTools(deps: ControlToolDeps): void {
         },
         target: {
           type: 'string',
-          enum: ['memory-index', 'scope', 'mcp-disabled'],
-          description: 'For repair: memory-index | scope | mcp-disabled.',
+          enum: ['memory-index', 'scope', 'mcp-disabled', 'tool-table'],
+          description: 'For repair: memory-index | scope | mcp-disabled | tool-table.',
         },
       },
       output: { schema: { type: 'string' }, render: (_a: unknown, v: unknown) => text(String(v)) },
@@ -168,14 +172,17 @@ export function buildControlTools(deps: ControlToolDeps): void {
  */
 async function repairState(deps: ControlToolDeps, args: any): Promise<string> {
   const target = String((args && args.target) || '').trim()
-  if (target !== 'memory-index' && target !== 'scope' && target !== 'mcp-disabled') {
-    throw new Error('missing argument: target — memory-index, scope or mcp-disabled')
+  if (target !== 'memory-index' && target !== 'scope' && target !== 'mcp-disabled' && target !== 'tool-table') {
+    throw new Error('missing argument: target — memory-index, scope, mcp-disabled or tool-table')
   }
   const r = await deps.repair(target)
   if (!r || r.ok === false) throw new Error((r && r.error) || 'repair failed')
   const lines = ['OK: repaired ' + target + '.']
   if (r.message) lines.push(String(r.message))
-  lines.push('The damaged file was renamed aside, not deleted; the plugin now continues with an empty table, so whatever it held no longer applies.')
+  // 工具表的恢复值不是空表而是**出厂名单**：说"空表"会让模型以为所有工具现在都开着。
+  lines.push(target === 'tool-table'
+    ? 'The damaged file was renamed aside, not deleted; the tool table is back to the factory list (the same one a fresh install starts with).'
+    : 'The damaged file was renamed aside, not deleted; the plugin now continues with an empty table, so whatever it held no longer applies.')
   return lines.join('\n')
 }
 

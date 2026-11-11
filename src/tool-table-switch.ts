@@ -15,6 +15,7 @@
 // 而体积表由注册口写、被 op 与场景写路径读，所以它作为**同一个 Map 对象**交回母文件，
 // 母文件那几处调用点一个字都不用改。
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
+import { renameWithRetry } from './skills/core-util.js'
 import { clearRuntimeNote, noteRuntime } from './compat/runtime-notes.js'
 import { hubPath } from './hub.js'
 import type { JsonFileRead } from './mcp/disabled-tools.js'
@@ -93,6 +94,8 @@ export interface ToolTableSwitch {
   ): Promise<{ ok: true; settings: ToolTableSettings } | ToolTableMutationFailure>
   toolTableReport(hidden?: readonly string[]): ToolTableReport
   toolTableOp(args: any): Promise<any>
+  /** 损坏侧车的恢复通道：改名留存 + 按出厂名单继续（只在 unknown 状态可用）。 */
+  repairToolTable(): Promise<{ ok: true; quarantined: string | null } | { ok: false; error: string }>
 }
 
 /** 锁内变更的失败形状：保留 op 层原有的 code / name / limit 字段。 */
@@ -265,6 +268,52 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
     return deps.withWriteLock(async () => await writeToolTableSettingsLocked(next))
   }
   /**
+   * 修复通道：把**损坏 / 不可读**的侧车改名留存，再按出厂名单继续。
+   *
+   * 为什么必须有：`unknown` 状态下所有写都被拒（`mutateToolTableSettings` 与
+   * `writeToolTableSettings` 两道），而唯一能改变状态的途径就是重写这个文件 ——
+   * 没有这条通道，侧车一坏，模型和用户都只能去手动删文件。
+   *
+   * 只在异常状态可用：健康的文件不做事（返回 `ok:false` 说明原因），免得把「恢复」
+   * 误用成「清空我的设置」。改名而不是删除：原文件留在 hub 里供事后排查。
+   *
+   * 改名后立刻写出厂名单，是因为 `unknown` 状态本身也要清 —— 只改名不写盘的话，
+   * 下一次读会把 missing 当默认，但缓存里的 unknown 与上报要等那次读才消。
+   *
+   * @returns `quarantined` = 留存文件的路径；`null` = 文件本来就不在（无可留存）。
+   */
+  async function repairToolTable(): Promise<{ ok: true; quarantined: string | null } | { ok: false; error: string }> {
+    await deps.ensurePaths()
+    return deps.withWriteLock(async () => {
+      const abs = hubPath(TOOL_TABLE_FILE)
+      const checked = checkToolTableRead(await deps.readJsonFileStrict(abs))
+      if (checked.status === 'ok' || checked.status === 'missing') {
+        return { ok: false as const, error: '工具表侧车当前可读（未损坏 / 未不可读），修复入口只在状态异常时可用；未改动任何东西' }
+      }
+      let quarantined: string | null = null
+      try {
+        quarantined = abs + '.corrupt-' + new Date().toISOString().replace(/[:.]/g, '-')
+        await renameWithRetry(abs, quarantined)
+      } catch (e) {
+        // 改名失败（权限 / 占用）就**不**写：写下去等于把读不出来的原文件覆盖掉。
+        return { ok: false as const, error: '修复失败（未改动原文件）：' + deps.message(e) }
+      }
+      const clean = normalizeHidden([...DEFAULT_HIDDEN_TOOLS])
+      try {
+        await deps.writeJsonFile(abs, { hidden: clean, presets: [] })
+      } catch (e) {
+        return { ok: false as const, error: '原文件已留存为 ' + quarantined + '，但写回出厂名单失败：' + deps.message(e) }
+      }
+      toolTableCache = { at: Date.now(), value: { hidden: clean, presets: [] }, off: new Set(clean) }
+      toolTableStateValue = 'ok'
+      toolTableIssueValue = null
+      clearRuntimeNote('tool-table-file')
+      try { deps.mcp.scheduleToolRestrictions() } catch { /* 可见性会等下一次 tools/change */ }
+      return { ok: true as const, quarantined }
+    })
+  }
+
+  /**
    * 锁内读-改-写：strict 读当前值 → 回调算新值 → 再确认一次并落盘。
    * 回调返回 `{ok:false}` 时不写盘；读坏时直接返回拒绝，绝不拿缓存 / 默认值当基线。
    */
@@ -422,5 +471,6 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
     mutateToolTableSettings,
     toolTableReport,
     toolTableOp,
+    repairToolTable,
   }
 }

@@ -181,9 +181,12 @@ export function argConditionalConfirmReason(
       const subject = target === 'memory-index' ? '记忆索引'
         : target === 'scope' ? '作用域侧车'
           : target === 'mcp-disabled' ? 'MCP 停用表'
-            : ''
+            : target === 'tool-table' ? '模型工具表'
+              : ''
       if (subject === '') return null
-      return `Repair the ${subject} — the damaged file is renamed aside and the plugin continues with an empty table. Anything it held is no longer applied.`
+      // 工具表的恢复值是出厂名单而不是空表（空表 = 所有工具都可见，与出厂相反）。
+      const outcome = target === 'tool-table' ? 'back to the factory list' : 'with an empty table'
+      return `Repair the ${subject} — the damaged file is renamed aside and the plugin continues ${outcome}. Anything it held is no longer applied.`
     }
     if (action !== 'enable' && action !== 'disable') return null
     if (!machineWide(args, mode)) return null

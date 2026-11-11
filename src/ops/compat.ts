@@ -59,6 +59,8 @@ export interface CompatOpsDeps {
   readSlashSettings(force?: boolean): Promise<SlashSettings>
   /** 模型工具表设置（读写侧车 `tool-table.json`；界面在「兼容」页同一块）。 */
   toolTableOp(args: any): Promise<any>
+  /** 损坏工具表侧车的恢复通道（改名留存 + 出厂名单）。 */
+  repairToolTable(): Promise<{ ok: true; quarantined: string | null } | { ok: false; error: string }>
   /** 当前工具表实况（注册时量到的体积 + 关掉了哪些），功能总览那一行用。 */
   toolTableReport(): ToolTableReport
   /** 工具表侧车状态（会先读一次，保证不是预热前的乐观默认）。 */
@@ -242,6 +244,8 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
     // 整份不进请求（与 MCP 停用那半边的区别：那些是宿主工具、关掉仍留在表里；这些是
     // 我们自己的工具，关掉两边一起生效）。返回里带分组体积，界面据此显示 ≈token。
     'tool-table': (args: any) => deps.toolTableOp(args),
+    // 侧车损坏后的唯一出口：改名留存 + 按出厂名单继续（状态健康时服务端会拒绝）。
+    'tool-table-repair': async () => await deps.repairToolTable(),
     // 功能总览：**按功能点**回答"现在每一项到底能不能用"，三层合成 ——
     //   ① 装配层（listener / provider / 适配是否真的挂上，来自运行时上报通道）
     //   ② 宿主能力层（compat 探测的路由判定）

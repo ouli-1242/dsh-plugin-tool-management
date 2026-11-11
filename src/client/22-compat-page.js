@@ -75,6 +75,8 @@
       const [toolTableBusy, setToolTableBusy] = React.useState(false)
       // 会话锁 / 写失败的原因（不静默失败：用户得知道为什么勾了没保存）。
       const [toolTableError, setToolTableError] = React.useState(null)
+      // 侧车损坏时的「修复」二次确认（与作用域条那颗同一条口径：第一次只切到确认）。
+      const [toolTableRepairArmed, setToolTableRepairArmed] = React.useState(false)
       // 「方案」弹窗：null = 未打开。`mode:'save'` 给当前这套勾选起名存下来；
       // `mode:'apply'` 列出已存的方案 + 那条不可删的出厂默认，点一行就应用。
       const [toolPreset, setToolPreset] = React.useState(null)
@@ -520,6 +522,29 @@
             setToolTableError(t('compat.tools.saveFailed'))
             loadToolTable(true)
           })
+          .then(function () { setToolTableBusy(false) })
+      }
+      /**
+       * 侧车损坏时的修复：改名留存 + 按出厂名单继续。
+       *
+       * 没有这条通道时，`unknown` 状态会让所有写都被拒，而界面上只有一句警告 ——
+       * 用户唯一能做的动作是去磁盘上删文件。只在异常状态可用（服务端对健康文件会拒绝）。
+       */
+      const repairToolTable = function () {
+        if (toolTableBusy) return
+        setToolTableBusy(true)
+        setToolTableError(null)
+        apiCall('tool-table-repair', {})
+          .then(function (r) {
+            setToolTableRepairArmed(false)
+            if (r && r.ok) {
+              loadToolTable(true)
+              loadFeatures(true)
+              return
+            }
+            setToolTableError((r && r.error) || t('compat.tools.repair.failed'))
+          })
+          .catch(function () { setToolTableError(t('compat.tools.repair.failed')) })
           .then(function () { setToolTableBusy(false) })
       }
       /** 单个工具的勾选：在 hidden 名单里加 / 删一个名字。 */
@@ -1628,7 +1653,19 @@
               : null,
             toolTableError ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'alert' }, toolTableError) : null,
             // 侧车 unknown：当前名单是"上次成功值 → 出厂默认"的兜底，保存会被服务端拒绝。
-            toolTable.state === 'unknown' ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' }, t('compat.tools.stateUnknown')) : null,
+            // 旁边那颗是唯一出口：把损坏文件改名留存、按出厂名单继续（第一次点击只切到确认）。
+            toolTable.state === 'unknown' ? React.createElement('div', { className: 'dsm-feedback dsm-warning', role: 'status' },
+              React.createElement('span', null, t('compat.tools.stateUnknown')),
+              React.createElement('button', {
+                type: 'button',
+                className: 'dsm-btn dsm-btn-quiet',
+                disabled: toolTableBusy,
+                title: t('compat.tools.repair.hint'),
+                onClick: function () {
+                  if (!toolTableRepairArmed) { setToolTableRepairArmed(true); return }
+                  repairToolTable()
+                },
+              }, toolTableRepairArmed ? t('compat.tools.repair.confirm') : t('compat.tools.repair.action'))) : null,
             // 合计只留一行。此前下面还有一句"其中 ≈X 是出厂默认关掉的 N 条…"，2026-10-12
             // 删除（用户裁定）：同一件事在说明行与工具悬停提示里都说过了，这里是第三次；
             // 而且"出厂默认关掉"这件事用户不需要为此做什么 —— 要用就勾上，不用管它。

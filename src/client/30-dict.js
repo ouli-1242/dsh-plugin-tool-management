@@ -665,7 +665,11 @@
         "compat.tools.reset.tip": "把本对话的工具表恢复成当前的全局默认（其他对话不受影响）",
         "compat.tools.reset.tip.workspace": "把本工作区的工具表恢复成当前的全局默认（其他工作区不受影响）",
         "compat.tools.saveFailed": "没保存上：与本机服务没接上",
-        "compat.tools.stateUnknown": "工具表侧车（tool-table.json）损坏或不可读：当前沿用上次成功值（没有则出厂默认），保存已禁用；请修复或删除该文件后重试。",
+        "compat.tools.stateUnknown": "工具表侧车（tool-table.json）损坏或不可读：当前沿用上次成功值（没有则出厂默认），保存已禁用；修复或删除该文件后重试。",
+        "compat.tools.repair.action": "修复工具表文件",
+        "compat.tools.repair.confirm": "确认修复",
+        "compat.tools.repair.hint": "把损坏的 tool-table.json 改名留存，工具表按出厂名单继续（原文件留在数据目录里，可事后查看）",
+        "compat.tools.repair.failed": "修复失败：与本机服务没接上",
         "compat.note.toolTableFile.corrupt": "工具表侧车（tool-table.json）损坏：暂时沿用上次成功值（没有则出厂默认），保存已禁用；请修复或删除该文件后重试。",
         "compat.note.toolTableFile.unreadable": "工具表侧车（tool-table.json）不可读：暂时沿用上次成功值（没有则出厂默认），保存已禁用；请检查文件权限或删除该文件后重试。",
         "compat.tools.summaryAll": "{total} 个工具全部下发 · ≈{tok} tok/轮",
@@ -762,7 +766,7 @@
         "compat.tools.hover.subagent_manager_save": "新建人设，或改掉已存在的那份 —— 回执会说清走了哪条。可改名字、描述、正文（正文会作为子代理的系统提示词）与输出要求，没传的字段保持原样；改名会连带改场景与档案里的绑定。provider / 模型 / 工具限制只留给面板（模型看不到自己改对了没有，所以不给）。描述决定模型什么时候会选它。",
         "compat.tools.hover.prompt_manager_list": "列出全局提示词预设（写进 AGENTS.md 的那一类）与摘要，标明当前生效的是哪一份 —— 同时只有一份生效。要换用哪份之前先用它确认名字。快捷提示词不在这个域里：那是用户自己在输入框里点出来的一段话，不进上下文，模型这边没有可做的动作。",
         "compat.tools.hover.prompt_manager_apply": "把某份预设应用到用户级 AGENTS.md，之后的对话立刻按它走。一次只有一份在生效，换一份就是替换上一份。",
-        "compat.tools.hover.tool_manager_tools": "模型自己开关**本对话**能用的插件工具。action=list 列出这个对话当前关着的那些（每条一句话用途 + 每轮 ≈token）；action=enable / disable 把它们打开或关掉，只影响这个对话，从下一次请求起生效。要在对话里说「进入某个场景」而场景工具恰好是关着的时候，就靠它。action=repair 修坏掉的侧车（记忆索引 / 作用域侧车 / MCP 停用表）—— 那一步会把损坏的文件改名留存、按空表继续，所以会先问一次。",
+        "compat.tools.hover.tool_manager_tools": "模型自己开关**本对话**能用的插件工具。action=list 列出这个对话当前关着的那些（每条一句话用途 + 每轮 ≈token）；action=enable / disable 把它们打开或关掉，只影响这个对话，从下一次请求起生效。要在对话里说「进入某个场景」而场景工具恰好是关着的时候，就靠它。action=repair 修坏掉的侧车（记忆索引 / 作用域侧车 / MCP 停用表 / 模型工具表）—— 那一步会把损坏的文件改名留存、按空表（工具表按出厂名单）继续，所以会先问一次。",
         // 删除族：五个域合进一条 `plugin_manager_remove`，悬停要一次说清 domain 的取值、
         // 各域 id 的形状，以及"只是不想注入就用 switch 停用"这条更省事的替代路径。
         "compat.tools.hover.plugin_manager_remove": "把一条移进回收站、从回收站恢复，或列出回收站。domain 决定动的是哪一类：memory（id 是 <场景>/<名字>）、skill、persona、preset（用它的 id）、scene。删除可恢复 —— 只想让它别再注入或别再进目录，用对应的 switch 停用即可，不必删；删技能时可传 root 指定来源。永久删除在各自那一页的回收站里做。",
@@ -1709,6 +1713,10 @@
         "compat.tools.reset.tip.workspace": "Set this workspace's tool table back to the current global default (other workspaces stay as they are)",
         "compat.tools.saveFailed": "Not saved: the local service could not be reached",
         "compat.tools.stateUnknown": "The tool-table sidecar (tool-table.json) is corrupt or unreadable: the last good value is in effect (factory default if none), and saving is blocked. Repair or delete the file and retry.",
+        "compat.tools.repair.action": "Repair tool-table file",
+        "compat.tools.repair.confirm": "Confirm repair",
+        "compat.tools.repair.hint": "Renames the damaged tool-table.json aside and continues with the factory list (the original stays in the data directory for inspection)",
+        "compat.tools.repair.failed": "Repair failed: the local service could not be reached",
         "compat.note.toolTableFile.corrupt": "The tool-table sidecar (tool-table.json) is corrupt: the last good value is in effect (factory default if none), and saving is blocked. Repair or delete the file and retry.",
         "compat.note.toolTableFile.unreadable": "The tool-table sidecar (tool-table.json) is unreadable: the last good value is in effect (factory default if none), and saving is blocked. Check file permissions or delete the file and retry.",
         "compat.tools.summaryAll": "all {total} tools sent · ≈{tok} tok per turn",
@@ -1802,7 +1810,7 @@
         "compat.tools.hover.subagent_manager_save": "Creates a persona, or updates the existing one — the receipt says which. You can set the name, description, body (the body becomes the subagent's system prompt) and output contract; omitted fields keep their current values, and a rename makes scene and archive bindings follow. Provider, model and tool limits stay in the panel (the model cannot tell whether it got them right, so it is not offered them). The description decides when the model picks it.",
         "compat.tools.hover.prompt_manager_list": "Lists the global prompt presets (the ones written into AGENTS.md) with their summaries and marks the one currently in effect — only one is active at a time. Use it to confirm the name before switching. Quick prompts are not this domain: the user picks those in the composer, they never enter the context, and there is nothing for the model to do with them.",
         "compat.tools.hover.prompt_manager_apply": "Applies a preset to the user-level AGENTS.md; later conversations follow it immediately. Only one preset is in effect, so applying another replaces it.",
-        "compat.tools.hover.tool_manager_tools": "The model switches which of this plugin's tools THIS conversation can use. action=list lists the ones that are off here (one line of purpose each, plus their per-turn token cost); action=enable / disable turns them on or off, affecting this conversation only and taking effect from the next request. This is what unblocks \"switch to that scene\" when the scene tools happen to be off. action=repair fixes a broken sidecar (memory index / scope sidecar / MCP disabled-tools table) — that renames the damaged file aside and continues with an empty table, so it asks first.",
+        "compat.tools.hover.tool_manager_tools": "The model switches which of this plugin's tools THIS conversation can use. action=list lists the ones that are off here (one line of purpose each, plus their per-turn token cost); action=enable / disable turns them on or off, affecting this conversation only and taking effect from the next request. This is what unblocks \"switch to that scene\" when the scene tools happen to be off. action=repair fixes a broken sidecar (memory index / scope sidecar / MCP disabled-tools table / model tool table) — that renames the damaged file aside and continues with an empty table (the factory list, for the tool table), so it asks first.",
         // One merged delete tool for all five domains: the hover has to carry the domain
         // values, the per-domain id shapes, and the cheaper alternative (switch off).
         "compat.tools.hover.plugin_manager_remove": "Moves one item to the trash, restores one from the trash, or lists the trash. domain says which kind: memory (id is <scene>/<name>), skill, persona, preset (use its id) or scene. Deleting is reversible — to just stop it being injected or leaving the catalog, disable it with the matching switch instead; pass root to pick the source when trashing a skill. Emptying the trash is a panel action on that domain's page.",

@@ -340,6 +340,9 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
     write: true,
     writeWhen: (a) => a.set === true || a.toggle !== undefined || a.presetSave !== undefined || a.presetDelete !== undefined,
   },
+  // 工具表侧车损坏 / 不可读时的恢复通道：写侧车，但**不冻结** —— 与 `mcpm-disabled-reset`
+  // 同一条理由（锁着场景时更需要能修好一个让所有工具表写操作都被拒的状态）。
+  'tool-table-repair': { write: true },
   // 场景页的界面设置（进入场景前要不要弹「会改什么」的预览卡）：写侧车，按写门禁。
   // **刻意不冻结**：它只是界面提示，锁着场景的人在场景页照样该能关掉提醒 —— 冻结的是五个
   // 管理域的改动，不是这个页面的显示偏好（判据见文件头 write/frozen 两段的边界）。
