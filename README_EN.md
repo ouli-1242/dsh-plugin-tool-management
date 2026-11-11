@@ -88,7 +88,7 @@ Scenes work in all three scopes. Under per-conversation, conversation A can sit 
 <tr><td><b>Skills</b></td><td>Grouped by source; enable, remove, import, edit; same-name skills show which copy is in effect; external directories stay read-only.</td></tr>
 <tr><td><b>Subagents</b></td><td>One <code>.md</code> per persona; delegate work, limit tools, pick a model; only the result comes back, never into your History.</td></tr>
 <tr><td><b>Prompts</b></td><td>Multiple <code>AGENTS.md</code> baselines with one-click apply/undo and five generations of backups; quick prompts paste into the composer from <code>/</code>.</td></tr>
-<tr><td><b>Memories</b></td><td>A scene is the folder; <code>.md</code> bodies are injected automatically; import/export, recycle bin, injection budget.</td></tr>
+<tr><td><b>Memories</b></td><td>A scene is the folder; <code>.md</code> bodies are injected automatically; import/export, recycle bin, injection budget (shared 256 KiB with learned notes; over the limit, whole entries step aside and are listed).</td></tr>
 <tr><td><b>Sessions</b></td><td>Archived by project, searchable, batch restore; import Claude Code / Cursor / Codex transcripts; export Markdown / JSONL.</td></tr>
 <tr><td><b>Host</b></td><td>Version and capability checks, access token, scope mode, injection switches, model-tool table, sidebar entry, backup cleanup.</td></tr>
 </table>
@@ -104,6 +104,7 @@ Off by default. When on, the agent records preferences, facts and corrections wo
 - **Card language and rewording**: the card uses the language of the note body; type your own wording in the card and it goes back to the model to rewrite, then asks you again.
 - **Pending only without a card**: with auto-confirm off, background review and headless sessions save as pending, which you can confirm on the Memory page; with auto-confirm on they go active directly.
 - **Two separate injection blocks**: global learned notes and workspace learned notes are injected as their own messages, apart from hand-written memories; adding one note re-sends only its layer.
+- **Shared injection budget with hand-written memories**: 256 KiB for both together, bodies injected in full and never truncated; over the limit, whole entries step aside in the order workspace notes → global notes → scene memories → hand-written global, the ones left out are listed at the end, and the page-header budget turns red.
 - **Disable goes to the recycle bin, and rows are editable**: a disabled note stops being injected and moves to the recycle bin on the Memory page, tagged as autonomous; restore or delete it permanently. The row switch matches memories, and the ⋯ menu edits the body. Deleting keeps the wording from being re-learned for 30 days.
 - **Background review and upkeep**: review runs only when the host compacts the context — no compaction, no review; failures retry with backoff and have a manual retry entry; maintenance runs at most once a day and only changes status, never deletes files.
 - **Separate storage and tool table**: bodies and state live under `evolution/notes/`, apart from hand-written memories; the autonomous-memory tool does not appear in the model tool table and does not follow scenes — only the two switches.
