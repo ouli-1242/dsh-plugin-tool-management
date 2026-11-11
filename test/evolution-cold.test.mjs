@@ -848,6 +848,8 @@ test('attachColdPath：真人消息仍喂证据缓存，合成消息不算用户
     message,
   })
   const session = { id: 's1' }
+  // 证据缓存是模块级、跨用例共享的：不清一遍，前一条用例留下的原话会让这里的 index 偏移。
+  clearUserTexts('s1')
   // 各注入插件的合成消息也常出现"记住"两个字，不能当成用户说的话。
   ctx.emit('session/event', session, {
     type: 'user/message',
@@ -861,6 +863,14 @@ test('attachColdPath：真人消息仍喂证据缓存，合成消息不算用户
   })
   assert.deepEqual(checkQuote('s1', '提交信息都用中文'), { ok: true, index: 0 })
   assert.equal(checkQuote('s1', '提交信息都用英文').ok, false)
+  // 后续轮次的消息是**追加**：前几轮说过的原话仍然核得上。
+  // 替换式写入会让这里判 `not-verbatim` 并硬拒（模型因此再也记不下那句话）。
+  ctx.emit('session/event', session, {
+    type: 'user/message',
+    data: { role: 'user', content: [{ type: 'text', text: '顺便跑一下测试' }], source: { kind: 'user' } },
+  })
+  assert.deepEqual(checkQuote('s1', '提交信息都用中文'), { ok: true, index: 0 })
+  assert.deepEqual(checkQuote('s1', '顺便跑一下测试'), { ok: true, index: 1 })
   clearUserTexts('s1')
   assert.equal((await episodes.list()).length, 0, '用户消息本身不触发复习')
 })

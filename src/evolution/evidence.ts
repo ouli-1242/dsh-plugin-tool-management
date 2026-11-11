@@ -1,8 +1,8 @@
 // 会话最近的**用户原文**缓存：给证据门做逐字校验。
 //
 // 为什么需要它：`turn/end` 的载荷只有 `{turn, reason}`（见 dsh-session 的 types.d.ts），
-// 而工具执行时拿不到"本轮用户说了什么"。唯一能读到用户原话的地方是 `agent/pre-step` 的
-// `decision.messages`。所以那一步把 user 消息抄一份进来，供此后的工具调用校验引句。
+// 而工具执行时拿不到"用户此前说过什么"。唯一的来源是 `session/event` 的 `user/message`
+// （冷路径已在监听），它一次带一条、按落盘顺序到达，所以这里按**追加**累积。
 //
 // 为什么必须逐字而不是"意思对就行"：模型极容易把自己的总结当成用户的话。实测里
 // "用户说了以后都用 pnpm" 与 "用户说要统一包管理器" 在语义上等价，但只有前者能核对。
@@ -66,8 +66,9 @@ export function isGenuineUserMessage(msg: any): boolean {
 /**
  * 收下这一步的用户原话。
  *
- * 调用点在 `session/event` 的 `user/message`（冷路径）与 `agent/pre-step`：前者是落盘
- * 事件、口径最准；后者带的是"本插件追加之前"的那份（`next()` 的返回值）。
+ * 调用点只有 `session/event` 的 `user/message`，一次一条。所以这里是**追加**，不是替换：
+ * 替换会让缓存恒为最后一句，模型再引用三轮前说过的原话时证据门判 `not-verbatim` 并**硬拒**
+ * （不是降级）—— 「以后提交信息都写中文」这种话说完两轮就再也记不下来了。
  */
 export function captureUserTexts(sessionId: string, messages: readonly unknown[]): void {
   if (!sessionId) return
@@ -80,13 +81,21 @@ export function captureUserTexts(sessionId: string, messages: readonly unknown[]
     if (text !== '') collected.push(text)
   }
   if (collected.length === 0) return
-  // 截断到字节上限：从最新往回取，老的先丢。
+  const prev = store.get(sessionId)
+  const all = [...(prev?.messages ?? [])]
+  for (const text of collected) {
+    // 同一句连着来两次（重放 / 重复事件）只留一条：引句核对按 `includes` 走，
+    // 重复不改变结论，白占额度。
+    if (all[all.length - 1] === text) continue
+    all.push(text)
+  }
+  // 截断到条数与字节上限：从最新往回取，老的先丢。
   const kept: string[] = []
   let bytes = 0
-  for (let i = collected.length - 1; i >= 0 && kept.length < MAX_MESSAGES; i--) {
-    const size = Buffer.byteLength(collected[i], 'utf8')
+  for (let i = all.length - 1; i >= 0 && kept.length < MAX_MESSAGES; i--) {
+    const size = Buffer.byteLength(all[i], 'utf8')
     if (bytes + size > MAX_BYTES && kept.length > 0) break
-    kept.unshift(collected[i])
+    kept.unshift(all[i])
     bytes += size
   }
   store.delete(sessionId)
