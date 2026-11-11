@@ -154,11 +154,14 @@ export function isSourceInstall(): boolean {
  * 投影缓存、设置、文件服务、预设名册、工具服务、连接准入、子代理 provider），本插件伸手要的
  * 成员一个没少；新增项都是可选参数或新方法（`tools.register` 的准入选项、`executable` /
  * `resolve`、文件服务的 `deleteFile` / `move` / `patch`）。`agent/pre-step` 只增
- * `modelSelection` 字段；`dsh-skill-office` 的七个内置技能名与 LibreOffice Kit 注入名单未变。
+ * `modelSelection` 字段；`dsh-skill-office` 的内置技能名与 LibreOffice Kit 注入名单在那一代没变
+ * （技能名单后来随官方撤下操作技能而变，见 rc.2 段）。
  *
  * 0.2.2-rc.2 的验证依据：把 rc.1 → rc.2 的包逐份对拍。两处契约变了 —— 子代理运行时撤掉了
  * provider 名册枚举（只剩按名查），激活请求把任务字段从 `request` 里挪到了顶层；本插件改成
- * 按名查 provider、请求两种形状都带，两代都成立。其余契约逐条比对无漂移。
+ * 按名查 provider、请求两种形状都带，两代都成立。官方还撤下了 office 的三个**操作**技能
+ * （渲染 / 换算 / 重算改由原生工具承担），技能页整目录拷贝官方 assets，名单随之变化 —— 本插件
+ * 不写死技能名，无须跟着改。其余契约逐条比对无漂移。
  */
 export const EXPECTED_PEER_RANGE = '>=0.2.2-rc.1 <0.2.3'
 /**

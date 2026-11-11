@@ -14,16 +14,19 @@ import { clearRuntimeNote, noteRuntime } from "../compat/runtime-notes.js";
 
 // ── 官方内置技能来源（随宿主注入会话上下文的内置技能）──────────────────────
 //
-// 宿主按形态注入不同的官方技能（官方源码逐一核对）：
-//   - 桌面版 8 个：office 路由 + office-docx / office-pptx / office-xlsx（创作）+
-//     office-render / office-recalculate / office-export-pdf（操作）（dsh-skill-office
-//     只在桌面宿主装配，assetRoot 指到 `<resources>/runtime/office-skills`）+
-//     diagnose-windows-sandbox-acl（dsh-sandbox-local 的门控是
+// 宿主按形态注入不同的官方技能，**名单由官方决定，本插件不写死**（整目录拷贝官方 assets，
+// 官方给几个就是几个）：
+//   - 桌面版：dsh-skill-office 的 assets（office 路由 + office-docx / office-pptx /
+//     office-xlsx）+ diagnose-windows-sandbox-acl（dsh-sandbox-windows-acl 的门控是
 //     `process.platform === "win32"`，rank 600）。
 //   - web 版：沙盒诊断技能由宿主注入（门控只看 win32 —— 用户截图实锤，
 //     按「web 不注入」的误判把 web 挡在门外，会让页面不显示而宿主照注）；office
-//     插件 web 宿主不装配、不注入，但用户要求技能页照样把这七个暴露出来
+//     插件 web 宿主不装配、不注入，但用户要求技能页照样把它们暴露出来
 //     统一管理（npm 包自带完整 assets，接管后可启停）。
+//
+// 官方自己在改这份名单：office 的三个**操作**技能（office-render / office-recalculate /
+// office-export-pdf）曾以 SKILL.md 的形式随包发布，后来被撤下，渲染 / 换算 / 重算改由官方
+// 的原生工具承担。所以「官方内置」列出的个数会随官方版本变 —— 这不是插件漏了。
 //
 // 它们或住在官方 asar 里、或由官方 provider 复制进临时目录自管，插件直接扫描/接管有两个
 // 坑：宿主子进程里对 asar 的 promises 读法与拦截器解析都出现过时灵时不灵（同机两次启动
@@ -34,7 +37,7 @@ import { clearRuntimeNote, noteRuntime } from "../compat/runtime-notes.js";
 // 整目录覆盖拷贝（与官方 provider 的「私有资源副本」同一做法），扫描、启停、overlay、
 // 脚本执行全部落在真实文件上。599 压过宿主 provider 的 600，停用即不注入。分形态是竞态
 // 教训：原先共用一份目录，web 启动把它解析到的沙盒技能盖进去，桌面物化好的
-// 8 个只剩 1 个；改成各写各的子目录，互不清对方的账。共享布局的残留（旧条目
+// 一组只剩 1 个；改成各写各的子目录，互不清对方的账。共享布局的残留（旧条目
 // 直接躺在 official-skills/ 下）按已知名单清理。
 //
 //   - 预设参考技能（dsh-agent-preset/skills）不注入会话上下文，不列入。
@@ -154,10 +157,10 @@ function officialSandboxSource(): string | null {
 
 // ── office 技能的「Installed LibreOffice Kit」段 ────────────────────────────
 //
-// 官方 dsh-office provider 在 get 时只给三个**操作**技能（office-render /
+// 官方 dsh-office provider 在 get 时只给**操作**技能（曾为 office-render /
 // office-recalculate / office-export-pdf）的正文**追加**一段「Installed LibreOffice
 // Kit」：SKILL.md 明文要求「使用这段提供的 libreofficeKit.node 与 .cli 绝对路径，
-// 禁止自行搜索/猜测」。三个创作技能只产出 OOXML，不执行 LibreOffice 命令，官方不给它们
+// 禁止自行搜索/猜测」。创作技能只产出 OOXML，不执行 LibreOffice 命令，官方不给它们
 // 补段。我们以覆盖方式接管后官方 provider 不再被问到，这段必须由我们补上 ——
 // 否则模型拿到的操作技能缺执行 LibreOffice 命令所需的全部路径。文案与 JSON 形状逐字取自官方
 // dsh-skill-office lib/index.js 的 officeRuntime()；node/cli 的落点按宿主形态各自核实：
@@ -299,11 +302,18 @@ function officialFormName(): "desktop" | "web" {
  *原先各形态共用一份目录（旧条目直接躺在 official-skills/ 下）；分形态目录后
  * 这些残留只会变成幽灵条目，按这份已知名单清掉。只清名单内的名字，绝不碰旁边的
  * `<form>/` 子目录 —— 那是另一种形态物化的现役目录。
+ *
+ * 名单要跟上官方：官方撤下 office 的三个操作技能（office-render / office-recalculate /
+ * office-export-pdf）后，旧布局里可能还躺着它们 —— 不清就会变成列表里点不开的幽灵条目。
  */
 const LEGACY_OFFICIAL_ENTRY_NAMES = Object.freeze([
+  "office",
   "office-docx",
   "office-pptx",
   "office-xlsx",
+  "office-render",
+  "office-recalculate",
+  "office-export-pdf",
   "scripts",
   "diagnose-windows-sandbox-acl",
 ]);
