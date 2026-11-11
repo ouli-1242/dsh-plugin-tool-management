@@ -40,14 +40,15 @@ import {
 } from './state.js'
 
 /**
- * 一条自动记忆的正文上限（显示宽度）。800 单位 = 400 汉字 / 800 字母。
+ * 一条自动记忆的正文上限（显示宽度）。2400 单位 = 1200 汉字 / 2400 字母。
  *
- * 按宽度而不是字符数：400 个汉字约等于 800–1000 个英文字母的内容，按字符数设限
- * 会让英文笔记只有中文的一半。超过说明它该是一份文档或一个技能，不是一条记忆。
+ * 按宽度而不是字符数：1200 个汉字约等于 2400 个英文字母的内容，按字符数设限
+ * 会让英文笔记只有中文的一半。与手写记忆的 `MAX_RULE_WIDTH` 同一档 —— 两者注入进
+ * 同一个池子，单条上限不该有两套说法。
  */
-export const MAX_AUTO_TEXT_WIDTH = 800
-/** 名称上限（显示宽度）：80 单位 = 40 汉字 / 80 字母；列表一行要放得下。 */
-export const MAX_AUTO_TITLE_WIDTH = 80
+export const MAX_AUTO_TEXT_WIDTH = 2400
+/** 名称上限（显示宽度）：100 单位 = 50 汉字 / 100 字母；列表一行要放得下。 */
+export const MAX_AUTO_TITLE_WIDTH = 100
 /** `boundary` 上限：合并时会追加，靠它兜住长度。 */
 const MAX_BOUNDARY = 500
 /**
@@ -275,7 +276,7 @@ export function createLearner(deps: LearnDeps) {
     if (text === '') return { ok: false, code: 'empty', error: 'nothing to learn: text is empty' }
     const width = textWidthOf(text)
     if (width > MAX_AUTO_TEXT_WIDTH) {
-      return { ok: false, code: 'too-long', error: `refused: this note is ${width} width units; the limit is ${MAX_AUTO_TEXT_WIDTH} (about 400 Chinese chars or 800 letters). Split it, or record it as a normal memory.` }
+      return { ok: false, code: 'too-long', error: `refused: this note is ${width} width units; the limit is ${MAX_AUTO_TEXT_WIDTH} (about 1200 Chinese chars or 2400 letters). Split it, or record it as a normal memory.` }
     }
 
     // 会话层：sid 不合法时不能落（目录即身份，换个名字就等于换了会话）。
@@ -344,7 +345,7 @@ export function createLearner(deps: LearnDeps) {
     if (text === '') return { ok: false, code: 'empty', error: 'nothing to learn: text is empty' }
     const width = textWidthOf(text)
     if (width > MAX_AUTO_TEXT_WIDTH) {
-      return { ok: false, code: 'too-long', error: `refused: this note is ${width} width units; the limit is ${MAX_AUTO_TEXT_WIDTH} (about 400 Chinese chars or 800 letters). Split it, or record it as a normal memory.` }
+      return { ok: false, code: 'too-long', error: `refused: this note is ${width} width units; the limit is ${MAX_AUTO_TEXT_WIDTH} (about 1200 Chinese chars or 2400 letters). Split it, or record it as a normal memory.` }
     }
     if (req.layer === LAYER_SESSION && env.sessionId && !sessionSegmentOk(env.sessionId)) {
       return { ok: false, code: 'bad-session', error: 'refused: this conversation id cannot be used as a directory name, so it cannot hold conversation-scoped notes. Use layer="workspace" instead.', gate: 'layer' }

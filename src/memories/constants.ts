@@ -17,11 +17,28 @@ export const MAX_ENTRIES = 20000            // 条目预算
 export const MAX_GROUP_SEGMENT_LENGTH = 64  // 场景/子目录段名长度上限
 /** 场景说明上限（场景段的 `user description:` 与界面共用）。 */
 export const MAX_DESCRIPTION_LENGTH = 500
-export const MAX_RULE_BYTES = 1 << 18       // 正文上限 256 KiB
+/**
+ * 单条记忆正文的上限（显示宽度）：2400 单位 = 1200 汉字 / 2400 字母。
+ *
+ * 按显示宽度而不是字节：同一条规则写中文比写英文密一倍，按字节卡会让中文记忆只有英文的
+ * 一半内容。2400 大致是一屏半的正文 —— 再长就不是"一条记忆"，而是一份该放进仓库的文档。
+ *
+ * 与注入总盘（`DEFAULT_MAX_BYTES`）是两道不同的闸：这条管单条，那条管全部启用的合计。
+ */
+export const MAX_RULE_WIDTH = 2400
+/** 记忆名称上限（显示宽度）：100 单位 = 50 汉字 / 100 字母；列表一行要放得下。 */
+export const MAX_MEMORY_NAME_WIDTH = 100
 export const DEFAULT_ORDER = 1000           // 默认投影 order（索引无记录时）
 export const DEFAULT_GROUP_ORDER = 1000     // 新场景默认 order
 export const SNAPSHOT_TTL_MS = 1000         // 读路径短 TTL 缓存，吸收 UI 密集轮询
-export const DEFAULT_MAX_BYTES = 1 << 17    // 记忆段预算上限（字节，=128 KiB）
+/**
+ * 注入总盘（字节，= 256 KiB）：**手写记忆与自主笔记共用**。
+ *
+ * 两块是同一个东西的两半（都会进每一次对话的上下文），各给一份预算会让"总共能吃多少"
+ * 没有答案，页头那个数字也只说得清一半。超限时按「工作区自主 → 全局自主 → 场景记忆 →
+ * 手动全局」从低到高整条丢弃，段尾列未注入清单 —— 永不切半条，半条规则比没有更危险。
+ */
+export const DEFAULT_MAX_BYTES = 1 << 18
 /**
  * 场景段（`scene-manager-catalog`）的预算上限（字节，= 4 KiB）。
  *

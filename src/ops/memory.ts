@@ -10,7 +10,8 @@ import { lstat, mkdir, readFile, rename, rm } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { parseSkillDoc, unquote } from '../skills/core.js'
 import { expandUploads, planMemoryImport } from '../imports/upload.js'
-import { MAX_RULE_BYTES, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, GLOBAL_SCENE_LABEL, SHARED_GROUP, MAX_ATTACH_ENTRY_BYTES, MAX_ATTACH_TOTAL_BYTES, MAX_ATTACH_ENTRIES, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, isValidGroupSegment, isValidGroupPath, message, fail } from '../memories/constants.js'
+import { MAX_RULE_WIDTH, MAX_MEMORY_NAME_WIDTH, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, GLOBAL_SCENE_LABEL, SHARED_GROUP, MAX_ATTACH_ENTRY_BYTES, MAX_ATTACH_TOTAL_BYTES, MAX_ATTACH_ENTRIES, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, isValidGroupSegment, isValidGroupPath, message, fail } from '../memories/constants.js'
+import { excerptOf, textWidthOf } from '../text-width.js'
 import { normalizeActive, enabledSceneOf, sceneOf, sceneLabel, attachmentSummarySync } from '../memories/projection.js'
 import { writeFileAtomically, writeFileAtomicBinary, readIndex, writeIndex, pathExists } from '../memories/index-io.js'
 import type { RuleIndexEntry } from '../memories/index-io.js'
@@ -30,6 +31,26 @@ function compareCreatedAt(a: string | undefined, b: string | undefined): number 
   if (a === undefined) return b === undefined ? 0 : 1
   if (b === undefined) return -1
   return a.localeCompare(b)
+}
+
+/**
+ * 正文按显示宽度校验（不是字节）：同一条规则写中文比写英文密一倍，按字节卡会让中文记忆
+ * 只有英文的一半内容。超限返回拒绝回执，没超返回 null。
+ *
+ * 盘上已有的超长文件不受影响 —— 这条闸只在**写入**时生效，读与注入照旧（`DEFAULT_MAX_BYTES`
+ * 才是注入侧那道闸）。
+ */
+function bodyWidthError(body: string): { ok: false; error: string; code: string } | null {
+  const width = textWidthOf(body)
+  if (width <= MAX_RULE_WIDTH) return null
+  return fail('error.rules.tooLarge', `记忆正文过长（${width} 显示宽度，上限 ${MAX_RULE_WIDTH}，约 ${MAX_RULE_WIDTH / 2} 汉字 / ${MAX_RULE_WIDTH} 字母）`)
+}
+
+/** 名称按显示宽度校验；`isValidGroupSegment` 只卡 64 字符，中文名 64 字就是 128 宽度。 */
+function nameWidthError(name: string): { ok: false; error: string; code: string } | null {
+  const width = textWidthOf(name)
+  if (width <= MAX_MEMORY_NAME_WIDTH) return null
+  return fail('error.rules.invalidName', `记忆名过长（${width} 显示宽度，上限 ${MAX_MEMORY_NAME_WIDTH}，约 ${MAX_MEMORY_NAME_WIDTH / 2} 汉字 / ${MAX_MEMORY_NAME_WIDTH} 字母）`)
 }
 
 /** 组装本域 op。rc 由 createMemoriesService 组装，契约见 ./ctx.ts。 */
@@ -74,10 +95,13 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {  const { buildProjected, co
       // 「可以忽略」这个判断只成立于 bundle 少、附件也少的时候 —— 记忆页不轮询（刷新点是
       // 页面打开 / 切换会话 / 写操作之后），但每次刷新都是全量，bundle 到几百条就该换缓存或异步。
       // flat 没有目录，原样返回（不加字段 = 界面不显示附件标签）。
+      // 列表行的正文摘要：界面扫读用，注入仍用完整正文（见 `Rule.excerpt`）。
       .map((r) => {
-        if (r.form !== 'bundle') return r
+        const excerpt = excerptOf(snap.bodies.get(r.id) ?? '')
+        const withExcerpt = excerpt === '' ? r : { ...r, excerpt }
+        if (r.form !== 'bundle') return withExcerpt
         const attach = attachmentSummarySync(dirname(r.path), r.name)
-        return attach ? { ...r, attach } : r
+        return attach ? { ...withExcerpt, attach } : withExcerpt
       })
     const groups = groupFilter ? snap.groups.filter((g) => g.name === groupFilter) : snap.groups
     // 会话层：`scenes[]` 每一行的 `active` / `selectable` 也按本会话投影 ——
@@ -271,6 +295,8 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {  const { buildProjected, co
       return fail('error.rules.sceneNotFound', `场景不存在：${targetGroup}（请先在「场景」页创建该场景）`, { group: targetGroup })
     }
     if (!isValidGroupSegment(name)) return fail('error.rules.invalidName', `记忆名非法：${name}（${SEGMENT_RULE_HINT}）`)
+    const nameTooWide = nameWidthError(name)
+    if (nameTooWide) return nameTooWide
     // 目标已存在（bundle 或 flat 皆算）→ 拒绝，避免静默覆盖。
     // 用 exists 而不是 shadowed：后者说的是「同名 bundle 把 flat 遮蔽了」，用户看到
     // 「被同名 bundle 遮蔽」会去找一个并不存在的 bundle。
@@ -283,7 +309,8 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {  const { buildProjected, co
     if (denied) return denied
     const body = String((args && args.body) ?? '')
     if (body.trim() === '') return fail('error.rules.bodyRequired', '规则正文不能为空')
-    if (Buffer.byteLength(body, 'utf8') > MAX_RULE_BYTES) return fail('error.rules.tooLarge', `规则正文过大（超过 ${MAX_RULE_BYTES >> 10} KiB）`)
+    const bodyTooWide = bodyWidthError(body)
+    if (bodyTooWide) return bodyTooWide
     // 正文序列化（frontmatter 仅写用户显式提供的字段）。是否生效由"场景是否启用"决定，
     // 超预算只在渲染时确定性截断 + 告警，不再拒绝写入。
     //
@@ -348,10 +375,12 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {  const { buildProjected, co
     for (const target of planned.targets) {
       if (target.group !== '' && !isValidGroupPath(target.group)) { skipped.push({ name: target.name, reason: '场景名非法，已跳过' }); continue }
       if (!isValidGroupSegment(target.name)) { skipped.push({ name: target.name, reason: '记忆名不合法，已跳过' }); continue }
+      const importedNameTooWide = nameWidthError(target.name)
+      if (importedNameTooWide) { skipped.push({ name: target.name, reason: importedNameTooWide.error }); continue }
       const text = Buffer.from(target.bytes).toString('utf8').replace(/^\uFEFF/, '')
       if (text.trim() === '') { skipped.push({ name: target.name, reason: '内容为空，已跳过' }); continue }
-      if (Buffer.byteLength(text, 'utf8') > MAX_RULE_BYTES) {
-        skipped.push({ name: target.name, reason: `正文超过 ${MAX_RULE_BYTES >> 10} KiB，已跳过` })
+      if (textWidthOf(text) > MAX_RULE_WIDTH) {
+        skipped.push({ name: target.name, reason: `正文超过 ${MAX_RULE_WIDTH} 显示宽度，已跳过` })
         continue
       }
       // bundle 附件复检（规划层已过滤，这里按 rules-attach 同口径再拦一次，防绕过规划层的调用方）。
@@ -469,10 +498,13 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {  const { buildProjected, co
     }
     const newName = args && args.name != null ? String(args.name).trim() : currentName
     if (!isValidGroupSegment(newName)) return fail('error.rules.invalidName', `记忆名非法：${newName}（${SEGMENT_RULE_HINT}）`)
+    const nameTooWide = nameWidthError(newName)
+    if (nameTooWide) return nameTooWide
     const newForm = args && args.form === 'bundle' ? 'bundle' : args && args.form === 'flat' ? 'flat' : located.kind
     const newBody = args && args.body != null ? String(args.body) : doc.body
     if (newBody.trim() === '') return fail('error.rules.bodyRequired', '规则正文不能为空')
-    if (Buffer.byteLength(newBody, 'utf8') > MAX_RULE_BYTES) return fail('error.rules.tooLarge', `规则正文过大（超过 ${MAX_RULE_BYTES >> 10} KiB）`)
+    const bodyTooWide = bodyWidthError(newBody)
+    if (bodyTooWide) return bodyTooWide
     // 形态转换 / 改名：先建新形态文件，再把旧形态复制进回收站、最后删原件
     // （确保任意失败点不产生半份规则；旧形态随时可恢复，README「删除都进回收站」无例外）。
     //

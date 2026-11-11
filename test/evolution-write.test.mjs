@@ -385,40 +385,40 @@ test('preview：direct 反映自动确认的结果', async () => {
   } finally { h.done() }
 })
 
-test('learn：正文按显示宽度限制（400 汉字 / 800 字母）', async () => {
+test('learn：正文按显示宽度限制（1200 汉字 / 2400 字母）', async () => {
   const h = harness()
   try {
-    const longZh = '提交前先跑完整构建与测试，确认所有用例通过后再打标签。'.repeat(20)
+    const longZh = '提交前先跑完整构建与测试，确认所有用例通过后再打标签。'.repeat(50)
     const r = await h.learner.learn({ text: longZh, source: 'tool_verified' }, cfgOf(), envOf())
     assert.equal(r.ok, false)
     assert.equal(r.code, 'too-long')
-    assert.match(r.error, /limit is 800/)
+    assert.match(r.error, /limit is 2400/)
 
-    // 400 汉字 = 宽度 800，是允许值；401 个汉字才超限。
-    const zh400 = ('提交前先跑完整构建与测试。'.repeat(40)).slice(0, 400)
-    assert.equal(textWidthOf(zh400), 800)
-    const okZh = await h.learner.learn({ text: zh400, source: 'tool_verified' }, cfgOf(), envOf())
-    assert.notEqual(okZh.code, 'too-long', '400 汉字应进入门禁，而不是被长度拦下')
+    // 1200 汉字 = 宽度 2400，是允许值；1201 个汉字才超限。
+    const zh1200 = ('提交前先跑完整构建与测试。'.repeat(120)).slice(0, 1200)
+    assert.equal(textWidthOf(zh1200), 2400)
+    const okZh = await h.learner.learn({ text: zh1200, source: 'tool_verified' }, cfgOf(), envOf())
+    assert.notEqual(okZh.code, 'too-long', '1200 汉字应进入门禁，而不是被长度拦下')
 
-    // 英文按同一把尺：800 字母 = 宽度 800；801 才超限。
-    const okEn = await h.learner.learn({ text: 'a'.repeat(800), source: 'tool_verified' }, cfgOf(), envOf())
-    assert.notEqual(okEn.code, 'too-long', '800 字母应进入门禁')
-    const en801 = await h.learner.learn({ text: 'a'.repeat(801), source: 'tool_verified' }, cfgOf(), envOf())
-    assert.equal(en801.code, 'too-long')
+    // 英文按同一把尺：2400 字母 = 宽度 2400；2401 才超限。
+    const okEn = await h.learner.learn({ text: 'a'.repeat(2400), source: 'tool_verified' }, cfgOf(), envOf())
+    assert.notEqual(okEn.code, 'too-long', '2400 字母应进入门禁')
+    const en2401 = await h.learner.learn({ text: 'a'.repeat(2401), source: 'tool_verified' }, cfgOf(), envOf())
+    assert.equal(en2401.code, 'too-long')
 
-    // 混排：200 汉字 + 400 字母 = 宽度 800。
-    const mixed = '汉'.repeat(200) + 'a'.repeat(400)
-    assert.equal(textWidthOf(mixed), 800)
+    // 混排：600 汉字 + 1200 字母 = 宽度 2400。
+    const mixed = '汉'.repeat(600) + 'a'.repeat(1200)
+    assert.equal(textWidthOf(mixed), 2400)
     const okMixed = await h.learner.learn({ text: mixed, source: 'tool_verified' }, cfgOf(), envOf())
     assert.notEqual(okMixed.code, 'too-long')
   } finally { h.done() }
 })
 
-test('titleOf：标题按显示宽度截断（40 汉字 / 80 字母）', () => {
-  assert.equal(titleOf('汉'.repeat(40)), '汉'.repeat(40))
-  assert.equal(titleOf('汉'.repeat(41)), '汉'.repeat(40))
-  assert.equal(titleOf('a'.repeat(80)), 'a'.repeat(80))
-  assert.equal(titleOf('a'.repeat(81)), 'a'.repeat(80))
+test('titleOf：标题按显示宽度截断（50 汉字 / 100 字母）', () => {
+  assert.equal(titleOf('汉'.repeat(50)), '汉'.repeat(50))
+  assert.equal(titleOf('汉'.repeat(51)), '汉'.repeat(50))
+  assert.equal(titleOf('a'.repeat(100)), 'a'.repeat(100))
+  assert.equal(titleOf('a'.repeat(101)), 'a'.repeat(100))
 })
 
 test('merge：同 key 且说法几乎一样 → 只加证据与边界，不新建第二个文件', async () => {

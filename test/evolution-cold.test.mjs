@@ -506,7 +506,7 @@ test('reviewer：`model` 只写 model 时沿用会话的 provider', async () => 
   const r = createReviewer({ llm, learner: fakeLearner(), budget, catalogLines: async () => [], log, message })
   await r.review(episodeOf(digestOf(1), { session: 's1', at: 'x', reason: 'signal' }), cfgOf({ model: 'fast-model' }), { provider: 'live-provider', model: 'live-model' })
   // 输出上限必须与路由一起进 `prepareCall`（放进 dispatch 会被官方判成配置变化）。
-  assert.deepEqual(llm.calls[0], { provider: 'live-provider', model: 'fast-model', temperature: 0, maxTokens: 2000 })
+  assert.deepEqual(llm.calls[0], { provider: 'live-provider', model: 'fast-model', temperature: 0, maxTokens: 6000 })
 })
 
 test('reviewer：输出不是 JSON → bad-json，可重试且不占学习名额', async () => {

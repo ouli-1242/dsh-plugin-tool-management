@@ -29,11 +29,14 @@ export const MAX_ITEMS_PER_REVIEW = 3
 /**
  * 单次请求的输出上限（token）。
  *
- * 必须装得下 `MAX_ITEMS_PER_REVIEW` 条**满配**正文：一条 800 显示单位 ≈ 400 汉字，
- * 三条中文正文加上 JSON 包装就已经超过 900 —— 那时输出被截断，`extractJson` 解析不出来，
- * 整批按 `bad-json` 重试到死信。2000 留了足够的余量（三条满配中文 ≈ 1300）。
+ * 必须装得下 `MAX_ITEMS_PER_REVIEW` 条**满配**正文：一条 2400 显示单位 ≈ 1200 汉字，
+ * 三条中文正文加上 JSON 包装就已经超过 3600 —— 那时输出被截断，`extractJson` 解析不出来，
+ * 整批按 `bad-json` 重试到死信。6000 留了足够的余量。
+ *
+ * 跟随 `MAX_AUTO_TEXT_WIDTH` 调整：改那个上限就要一起重算这里，否则长笔记会在复习这条路上
+ * 静默变成"永远重试失败"。
  */
-const MAX_OUTPUT_TOKENS = 2000
+const MAX_OUTPUT_TOKENS = 6000
 /** 单次请求的超时。超了就按失败处理，下一轮再试。 */
 const REVIEW_TIMEOUT_MS = 45_000
 

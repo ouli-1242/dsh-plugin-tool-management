@@ -40,7 +40,7 @@ const META_FILE = 'meta.json'
 export const DEFAULT_PRESET_DESC_MAX_LENGTH = 300
 
 /**
- * 预设正文的字节上限（256 KiB），与记忆正文的 `MAX_RULE_BYTES` 同档。
+ * 预设正文的字节上限（256 KiB），与记忆注入总盘（`DEFAULT_MAX_BYTES`）同档。
  *
  * 为什么需要：注入侧虽按 64 KiB 截断（`AGENTS_MD_MAX_BYTES`），但盘上可以无限大，
  * 而每次读都要整份进内存。上限拦在**写**这一侧 —— 已存在的超大文件不阻断读取，
