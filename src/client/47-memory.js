@@ -904,14 +904,26 @@
                 if (!res || res.ok === false) {
                   return Object.assign({}, cur, { loading: false, error: translateError(t, res) })
                 }
+                var boundary = String(res.boundary || '').trim()
+                var body = String(res.body || '')
+                // 正文落盘时就把「边界：…」拼在了末尾（`renderBody`），而 frontmatter 里
+                // 另有一份 `auto_boundary` —— 两个都渲染就是同一句话出现两遍。这里把正文里
+                // 那一份摘掉，只留弹窗底部那行带标签的，读起来才是"正文 + 边界"两段。
+                if (boundary !== '') {
+                  var tail = '边界：' + boundary
+                  var at = body.lastIndexOf(tail)
+                  if (at >= 0 && body.slice(at + tail.length).trim() === '') {
+                    body = body.slice(0, at).replace(/\s+$/, '')
+                  }
+                }
                 return Object.assign({}, cur, {
                   loading: false,
                   title: String(res.title || ''),
-                  body: String(res.body || ''),
+                  body: body,
                   layer: String(res.layer || ''),
                   kind: String(res.kind || ''),
                   status: String(res.status || ''),
-                  boundary: String(res.boundary || ''),
+                  boundary: boundary,
                   error: null,
                 })
               })
@@ -942,7 +954,34 @@
             loadEvolutionReview(id)
           }
 
-          /** 确认当前这条 → 自动进入下一条未确认的；全都确认完自动关窗。 */
+          /**
+           * 处理完当前这条（确认 / 否决）后进入下一条未处理的；全都处理完自动关窗。
+           *
+           * 先往后找、再从头上找：左右翻过页再处理时不会漏掉前面剩下的。`done` 记的是
+           * 已经处理过的 id，不是下标 —— 处理会让条目离开候选清单，按下标记会错位。
+           */
+          function stepAfterEvolutionReview(cur, done, okText) {
+            refreshEvolution()
+            var next = -1
+            for (var i = cur.index + 1; i < cur.ids.length; i++) {
+              if (!done[cur.ids[i]]) { next = i; break }
+            }
+            if (next < 0) {
+              for (var j = 0; j < cur.ids.length; j++) {
+                if (!done[cur.ids[j]]) { next = j; break }
+              }
+            }
+            if (next < 0) {
+              setEvoReview(null)
+              setResult({ ok: true, text: okText })
+              return
+            }
+            var nid = cur.ids[next]
+            setEvoReview({ ids: cur.ids, index: next, id: nid, done: done, title: '', body: '', layer: '', kind: '', status: '', boundary: '', loading: true, busy: false, error: null })
+            loadEvolutionReview(nid)
+          }
+
+          /** 确认当前这条 → 自动进入下一条未处理的。 */
           function approveEvolutionInReview() {
             var cur = evoReview
             if (!cur || cur.busy || cur.loading) return
@@ -957,25 +996,35 @@
               }
               var done = Object.assign({}, cur.done)
               done[id] = true
-              // 先往后找，没有再从头上找 —— 左右翻过页再确认时不会漏掉前面的。
-              var next = -1
-              for (var i = cur.index + 1; i < cur.ids.length; i++) {
-                if (!done[cur.ids[i]]) { next = i; break }
-              }
-              if (next < 0) {
-                for (var j = 0; j < cur.ids.length; j++) {
-                  if (!done[cur.ids[j]]) { next = j; break }
-                }
-              }
-              refreshEvolution()
-              if (next < 0) {
-                setEvoReview(null)
-                setResult({ ok: true, text: t('evo.approved') })
+              stepAfterEvolutionReview(cur, done, t('evo.approved'))
+            }).catch(function (e) {
+              setEvoReview(function (c) {
+                return c && c.id === id ? Object.assign({}, c, { busy: false, error: errMsg(e) }) : c
+              })
+            })
+          }
+
+          /**
+           * 否决当前这条 → 归档（不再注入、列表里收起、随时可恢复），然后进入下一条。
+           *
+           * 不用 `evolution-forget`：那条会删文件并写墓碑，30 天内同义内容学不回来 ——
+           * 「这条我不要」和「这个说法以后都别记」是两件事，否决只该表达前一件。
+           */
+          function rejectEvolutionInReview() {
+            var cur = evoReview
+            if (!cur || cur.busy || cur.loading) return
+            var id = cur.id
+            setEvoReview(Object.assign({}, cur, { busy: true, error: null }))
+            apiCall('evolution-set-status', { id: id, status: 'archived' }).then(function (res) {
+              if (!res || res.ok === false) {
+                setEvoReview(function (c) {
+                  return c && c.id === id ? Object.assign({}, c, { busy: false, error: translateError(t, res) }) : c
+                })
                 return
               }
-              var nid = cur.ids[next]
-              setEvoReview({ ids: cur.ids, index: next, id: nid, done: done, title: '', body: '', layer: '', kind: '', status: '', boundary: '', loading: true, busy: false, error: null })
-              loadEvolutionReview(nid)
+              var done = Object.assign({}, cur.done)
+              done[id] = true
+              stepAfterEvolutionReview(cur, done, t('evo.rejected'))
             }).catch(function (e) {
               setEvoReview(function (c) {
                 return c && c.id === id ? Object.assign({}, c, { busy: false, error: errMsg(e) }) : c
@@ -1884,10 +1933,11 @@
                 // 页头只留这一颗入口，记忆列表不再被它顶下去。
                 React.createElement('button', {
                   key: 'evo', type: 'button', className: 'dsm-btn dsm-btn-secondary' + (evoOn ? ' dsm-evo-head-on' : '') + (evoPending > 0 ? ' dsm-evo-head-pending' : ''),
+                  // 有待确认时只换颜色、不再挂数字（用户 2026-11-11）：按钮上的角标会和
+                  // 页头统计、卡片里的「待确认 N 条」重复，而条数本身在这里也不可点。
                   title: evoPending > 0 ? t('evo.pending.short', { count: evoPending }) : t('evo.title'),
                   onClick: function () { setResult(null); setEvoOpen(true) },
-                }, t('evo.title'),
-                  evoPending > 0 ? React.createElement('span', { key: 'p', className: 'dsm-count dsm-count-tight' }, String(evoPending)) : null),
+                }, t('evo.title')),
                 React.createElement('button', { key: 'trash', type: 'button', className: 'dsm-btn dsm-btn-secondary', disabled: busy, onClick: openTrash }, t('memory.trash.open')),
                 scopeLeaseKeys('memory').length > 0 ? React.createElement('button', { key: 'stopall', type: 'button', className: 'dsm-btn dsm-btn-danger-outline', disabled: busy || scopeWriteLocked(anyLocked), onClick: stopAllMemories }, t('scope.stopAll')) : null,
               ],
@@ -1947,7 +1997,9 @@
                   React.createElement('div', { className: 'dsm-evo-review-head' },
                     React.createElement('span', { className: 'dsm-evo-review-title' }, evoReview.title || evoReview.id),
                     React.createElement('span', { className: 'dsm-tag' }, evoReview.layer === 'global' ? t('evo.scope.global') : evoReview.layer === 'workspace' ? t('evo.scope.workspace') : t('evo.tag.candidate')),
-                    React.createElement('span', { className: 'dsm-help' }, t('evo.review.position', { index: evoReview.index + 1, total: evoReview.ids.length }))),
+                    // 只写「第几条」：总数与当前序号紧挨着写成 `3/3` 时，末尾那个 3 会被
+                    // 读成"还有 3 条"（用户 2026-11-11）。条数在页头徽标与统计里已经有了。
+                    React.createElement('span', { className: 'dsm-help' }, t('evo.review.position', { index: evoReview.index + 1 }))),
                   evoReview.loading
                     ? React.createElement('p', { className: 'dsm-help' }, t('loading'))
                     : React.createElement('div', { className: 'dsm-evo-review-content' },
@@ -1960,9 +2012,11 @@
                   title: t('evo.review.next'), 'aria-label': t('evo.review.next'),
                   onClick: function () { stepEvolutionReview(1) },
                 }, '›')),
-              // 左下取消 / 右下确认（用户 2026-11-11）。确认后自动进下一条，全部确认完自动关窗。
+              // 左下否决 / 右下确认（用户 2026-11-11）。处理完自动进下一条，全部处理完自动关窗。
+              // 否决 = 归档（不注入、可恢复），不是删除 —— 删除会写墓碑，30 天内同义内容
+              // 都学不回来，那是另一件事。
               React.createElement('div', { className: 'dsm-modal-actions dsm-modal-actions-split' },
-                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoReview.busy, onClick: function () { setEvoReview(null) } }, t('btn.cancel')),
+                React.createElement('button', { type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoReview.busy || evoReview.loading, onClick: rejectEvolutionInReview }, t('evo.review.reject')),
                 React.createElement('button', {
                   type: 'button', className: 'dsm-btn',
                   disabled: evoReview.busy || evoReview.loading || evoReview.error !== null,
