@@ -145,7 +145,7 @@ export const SUPERSEDE_NOTE = 'Supersedes earlier injected content of the same k
  * （`hiddenTools`），而工具注册在热重载 / 启动间隙会瞬时为空 —— 并进键会先注入一句
  * "你手里没有这个工具"（假话），下一步再撤回。静态字符串型 `how` 已经自动进键（见 `frameKeyOf`）。
  */
-export const FRAME_REVISION = 2
+export const FRAME_REVISION = 3
 
 /**
  * 框架指纹：决定"该域消息的框架是不是这一版"。
@@ -214,12 +214,14 @@ export const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
     },
     supersede: SUPERSEDE_NOTE,
   },
-  // 工作区自主笔记：标题在这里，正文里不再写 `## Learned notes` —— 框架的 `#` 已经是
-  // 板块层，正文再写一个 `##` 只会让模型读成两个层级。范围后缀（this workspace）不进标题：
-  // 它和全局块本来就是两条消息，模型从各自的注入域就能区分；重复写只是噪音。
-  // 收尾句在正文末尾，这里不再写 `how`。
+  // 工作区自主笔记：标题在这里，正文里不再写 `##` 标题 —— 框架的 `#` 已经是板块层，
+  // 正文再写一个 `##` 只会让模型读成两个层级。
+  //
+  // 标题**不能也叫 `Learned notes`**：全局块里已经有一个同名的 `## Learned notes` 组，
+  // 两块同时出现时模型分不清哪份是全局、哪份只在本项目成立（真实测试里两条都叫这个名字）。
+  // 范围写进标题而不是另起一句：标题是模型唯一能直接读到的区分依据，多一句说明只是噪音。
   memoryWorkspace: {
-    title: 'Learned notes',
+    title: 'Workspace notes',
     supersede: SUPERSEDE_NOTE,
   },
   mcp: {

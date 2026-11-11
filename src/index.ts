@@ -2626,6 +2626,9 @@ export default {
         entries: auto.picked.map((line) => ({ key: 'auto:' + line.id, text: line.line })),
         truncated: auto.truncated,
         mode: auto.mode,
+        // 差集的分组标题要与这一域的板块标题一致（`Workspace notes`）：默认值 `Learned
+        // notes` 是全局块里那个 `##` 组的名字，用在这里会让两块在差集里又变成同名。
+        groupTitle: 'Workspace notes',
       }
     }
 

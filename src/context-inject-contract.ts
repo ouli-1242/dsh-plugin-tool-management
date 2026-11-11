@@ -184,6 +184,11 @@ export interface IncrementalSnapshot {
   /** 有条目被预算截掉：差集无法表达"未列出清单"的变化，这一步回全量。 */
   truncated: boolean
   mode: string
+  /**
+   * 无分组条目的分组标题（自主笔记）。差集沿用它，必须与全量块里的 `##` 标题一致。
+   * 缺省 `Learned notes` —— 全局块里那一段的名字。
+   */
+  groupTitle?: string
 }
 
 /** 一个域的注入声明。 */

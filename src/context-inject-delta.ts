@@ -55,7 +55,7 @@ function entryTextOf(entry: IncrementalEntry, removed: boolean): string {
   return first === undefined ? text : first.trimEnd()
 }
 
-/** 按分组标题聚合；无分组的（自主笔记）归在空串组，渲染成 `Learned notes`。 */
+/** 按分组标题聚合；无分组的（自主笔记）归在空串组，渲染成 `groupTitle`。 */
 function grouped(entries: readonly IncrementalEntry[]): Map<string, IncrementalEntry[]> {
   const out = new Map<string, IncrementalEntry[]>()
   for (const entry of entries) {
@@ -67,12 +67,12 @@ function grouped(entries: readonly IncrementalEntry[]): Map<string, IncrementalE
   return out
 }
 
-function renderGroup(entries: readonly IncrementalEntry[], removed: boolean): string {
+function renderGroup(entries: readonly IncrementalEntry[], removed: boolean, groupTitle: string): string {
   const chunks: string[] = []
   for (const [group, list] of grouped(entries)) {
-    // 空串组是自主笔记：全量块里它的标题是 `## Learned notes`，差集沿用同一个名字，
+    // 空串组是自主笔记：全量块里它的标题是 `## <板块名>`，差集沿用同一个名字，
     // 不能让这些"任何对话都成立"的笔记落进上一条用户记忆的场景标题下。
-    chunks.push(`### ${group === '' ? 'Learned notes' : group}`)
+    chunks.push(`### ${group === '' ? groupTitle : group}`)
     for (const entry of list) chunks.push(entryTextOf(entry, removed))
   }
   return chunks.join('\n\n')
@@ -108,11 +108,11 @@ function leadOf(diff: IncrementalDiff): string {
  * 条目；不说清的话，它会把没列出的条目当成被关掉了。新增与更新还要分清「追加」与
  * 「同一替换」—— 两者在 `## Added` / `## Updated` 标题下长得一样。
  */
-export function renderIncrementalDelta(diff: IncrementalDiff): string {
+export function renderIncrementalDelta(diff: IncrementalDiff, groupTitle = 'Learned notes'): string {
   const sections: string[] = []
-  if (diff.added.length > 0) sections.push('## Added\n\n' + renderGroup(diff.added, false))
-  if (diff.updated.length > 0) sections.push('## Updated\n\n' + renderGroup(diff.updated, false))
-  if (diff.removed.length > 0) sections.push('## Removed\n\n' + renderGroup(diff.removed, true))
+  if (diff.added.length > 0) sections.push('## Added\n\n' + renderGroup(diff.added, false, groupTitle))
+  if (diff.updated.length > 0) sections.push('## Updated\n\n' + renderGroup(diff.updated, false, groupTitle))
+  if (diff.removed.length > 0) sections.push('## Removed\n\n' + renderGroup(diff.removed, true, groupTitle))
   if (sections.length === 0) return ''
   return leadOf(diff) + '\n\n' + sections.join('\n\n')
 }
@@ -171,7 +171,7 @@ export function planIncremental(input: {
   const changes = diffCount(diff)
   if (changes === 0) return { kind: 'none', mode, entries }
   if (changes > (input.maxChanges ?? 40)) return { kind: 'full', mode, entries }
-  const text = renderIncrementalDelta(diff)
+  const text = renderIncrementalDelta(diff, input.snapshot.groupTitle)
   // 差集不比全量小就没有省的意义；回全量还能顺手把账本重置成干净的一份。
   if (text === '' || Buffer.byteLength(text, 'utf8') >= Buffer.byteLength(input.fullText, 'utf8')) {
     return { kind: 'full', mode, entries }

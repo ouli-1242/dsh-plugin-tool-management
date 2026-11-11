@@ -96,20 +96,34 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
   /**
    * 把模型给的引用解析成一条笔记：id（可带 `note:`）→ slot → title → 原文，唯一命中才算。
    *
-   * 为什么允许 title/原文：注入行里只有 key 与摘要，模型不一定记得 id；唯一命中时
-   * 直接读/删，比让它再查一次 list 省一轮。多条命中必须报候选 —— 猜错一条就是删错。
+   * 三条口径（都由真实测试暴露出来）：
+   *   - **原文 = 注入行里那一行**（`oneLine`，去标点的首句），不是整段正文。模型的引用
+   *     来自它看到的注入行，让它去猜"整段正文"只会白试一轮。末尾标点也一并忽略。
+   *   - **先按活跃状态过滤**：同 slot 冲突替换后会留下一条 `superseded`，它与新的那条
+   *     同 key。不过滤就会报 ambiguous —— 而 agent 用 slot 当稳定句柄的前提就没了。
+   *     只有多条**活跃**同引用时才报歧义，防删错的初衷不变。
+   *   - 活跃状态一个都没有时退回全量匹配，让错误消息能给出候选。
    */
   const resolveNote = async (ref: string): Promise<{ id: string | null; hits: any[] }> => {
     const raw = stripNoteRef(ref)
     if (raw === '' || !evo) return { id: null, hits: [] }
     const list: any = await evo['evolution-list']({ all: true })
     const rows: any[] = list && Array.isArray(list.entries) ? list.entries : []
-    const hits = rows.filter((e: any) =>
+    const trimEnd = (s: unknown): string => String(s ?? '').replace(/[。．.!！?？\s]+$/, '')
+    const matches = (e: any): boolean =>
       String(e.id || '') === raw ||
       String(e.key || '') === raw ||
       String(e.title || '') === raw ||
-      String(e.oneLine || '') === raw
-    )
+      String(e.oneLine || '') === raw ||
+      trimEnd(e.oneLine) === trimEnd(raw)
+    const live = rows.filter((e: any) => {
+      const st = String(e.status || '')
+      return st === 'candidate' || st === 'active' || st === 'core' || st === 'playbook'
+    })
+    const activeHits = live.filter(matches)
+    if (activeHits.length === 1) return { id: String(activeHits[0].id), hits: activeHits }
+    if (activeHits.length > 1) return { id: null, hits: activeHits }
+    const hits = rows.filter(matches)
     return hits.length === 1 ? { id: String(hits[0].id), hits } : { id: null, hits }
   }
   const describeNoteHits = (hits: any[]): string =>
@@ -121,7 +135,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
   const noteReadText = async (ref: string): Promise<string> => {
     if (!evo) throw new Error('agent notes are not available in this build')
     const raw = stripNoteRef(ref)
-    if (raw === '') throw new Error('missing argument: id — the note id (note:...), slot, title or exact text.')
+    if (raw === '') throw new Error('missing argument: id — the note id (note:...), its slot, its title, or the first line of the note as injected (trailing punctuation ignored).')
     let a: any = await evo['evolution-read']({ id: raw, touch: true })
     if (!a || a.ok === false) {
       const resolved = await resolveNote(raw)
@@ -142,6 +156,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     if (a.key) lines.push('slot: ' + String(a.key))
     if (a.basis) lines.push('basis: ' + String(a.basis))
     if (a.boundary) lines.push('boundary: ' + String(a.boundary))
+    if (a.alias) lines.push('also said as: ' + String(a.alias))
     if (a.degraded) lines.push('degraded: ' + String(a.degraded))
     lines.push('', String(a.body || ''))
     const ev: any[] = Array.isArray(st.evidence) ? st.evidence : []
@@ -807,7 +822,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
 
   register(defineTool({
     name: PROACTIVE_MEMORY_TOOL,
-    description: 'Agent notes (autonomous memory) — short notes you learned: a preference, fact, correction or procedure. Only for what YOU inferred; when the user explicitly asks to remember something, use memory_remember instead. learn: `title` (2-8 words) + `text` (<=400 Chinese chars / 800 letters; 1-2 clear sentences by default, or follow the style line in the learned-notes section); `layer` global = every project / workspace = this one; pass `slot` (a stable name) when you may update or forget it later; `quote` + `source` when the user said it. forget: `note` = id (note:...), slot, title or exact text. Inspect notes with the memory read tool. Only when the user asks you to remember, or just corrected you; do not scan the conversation for candidates.',
+    description: 'Agent notes (autonomous memory) — short notes you learned: a preference, fact, correction or procedure. Only for what YOU inferred; when the user explicitly asks to remember something, use memory_remember instead. learn: `title` (2-8 words) + `text` (<=400 Chinese chars / 800 letters; 1-2 clear sentences by default, or follow the style line in the learned-notes section); `layer` global = every project / workspace = this one; pass `slot` (a stable name) when you may update or forget it later; `quote` + `source` when the user said it. forget: `note` = id (note:...), slot, title, or the first line as it was injected. Inspect notes with the memory read tool. Only when the user asks you to remember, or just corrected you; do not scan the conversation for candidates.',
     parameters: {
       action: { type: 'string', enum: ['learn', 'forget'], required: true, description: 'learn or forget.' },
       // ── learn ──
@@ -820,7 +835,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       layer: { type: 'string', enum: ['global', 'workspace'], description: 'learn: global (every project) or workspace (this project). Omit only when unsure; the card asks, or auto-confirm uses the default.' },
       ttlDays: { type: 'number', description: 'learn: optional; re-check after N days.' },
       // ── forget ──
-      note: { type: 'string', description: 'forget: the note — id (note:...), slot, title, or exact text. learn: alias for text (the note body).' },
+      note: { type: 'string', description: 'forget: the note — id (note:...), slot, title, or the first line of the note as it was injected (trailing punctuation ignored; the full body is not required). learn: alias for text (the note body).' },
     },
     output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
     async execute(args: any, exec: any) {
@@ -833,7 +848,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
 
       if (action === 'forget') {
         const ref = noteArgOf(args)
-        if (ref === '') throw new Error('missing argument: note — the note id (note:...), slot, title or exact text.')
+        if (ref === '') throw new Error('missing argument: note — the note id (note:...), its slot, its title, or the first line of the note as injected (trailing punctuation ignored).')
         const raw = stripNoteRef(ref)
         const forget = async (id: string): Promise<any> => noteOps['evolution-forget']({ id, actor: 'model' })
         let r: any = await forget(raw)
@@ -846,11 +861,17 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
           }
         }
         if (!r || r.ok === false) {
+          // 带 `note:` 前缀的一定是笔记：它只是不存在了，别再说"这像是用户记忆"。
+          if (isNoteRef(ref)) {
+            throw new Error('no such agent note: ' + ref + ' (it may have been forgotten or archived). List the current notes with memory_get kind=note.')
+          }
           // 用户记忆 id 也是 `<scene>/<name>` 形状；零命中时明确说这不是笔记，别让模型再猜。
           if (raw.includes('/')) {
             throw new Error('no such agent note: ' + ref + '. That looks like a user memory id (<scene>/<name>) — user memories are disabled or deleted on the Memory page, not here. Agent note ids start with note:.')
           }
-          throw new Error(String((r && r.error) || 'failed to forget it'))
+          // 走到这里说明 id / slot / title / 注入行都没命中。`evolution-forget` 的内部错
+          // （`not a memory id`）对模型没有任何可执行信息 —— 它要的是"下一步做什么"。
+          throw new Error('no such agent note: "' + ref + '". Pass its id (note:<layer>/<slug>), its slot, its title, or the first line exactly as it was injected; list the current notes with memory_get kind=note to find one.')
         }
         return 'OK: forgot ' + noteRefOf(String(r.id || raw)) + '. It will not be learned again for 30 days.'
       }

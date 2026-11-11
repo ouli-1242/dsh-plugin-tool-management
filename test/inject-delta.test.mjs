@@ -65,6 +65,11 @@ test('差集正文：三类各有标题、按场景分组、删除只留第一�
   assert.match(text, /Every other entry is unchanged/)
   assert.match(text, /## Added\n\n### Scene: Work\n\n- \*\*A\*\* — new/)
   assert.match(text, /### Learned notes\n\n- \*\*Note\*\* — learned/)
+  // 工作区块传自己的板块名：两块都叫 `Learned notes` 时模型分不清哪份是全局。
+  assert.match(
+    renderIncrementalDelta({ added: [{ key: 'n', text: '- **Note** — learned' }], updated: [], removed: [] }, 'Workspace notes'),
+    /### Workspace notes\n\n- \*\*Note\*\* — learned/,
+  )
   assert.match(text, /## Updated\n\n### Scene: Work\n\n- \*\*B\*\* — changed/)
   assert.match(text, /## Removed\n\n### Scene: Home\n\n- \*\*C\*\* — old body\n?$/)
   assert.ok(!/## Removed[\s\S]*second line/.test(text), '删除项不重贴旧正文')

@@ -442,10 +442,39 @@ test('merge：同 key 且说法几乎一样 → 只加证据与边界，不新�
 
     assert.deepEqual(h.docs(), [first.id], '目录里只该有一个文件')
     const doc = h.readDoc(first.id)
-    assert.match(pickField(doc, 'auto_boundary'), /不要写英文/, '新说法要补进边界（用户下次能看见差别）')
+    assert.match(pickField(doc, 'auto_alias'), /不要写英文/, '新说法要记成别名（用户下次能看见差别）')
+    assert.equal(pickField(doc, 'auto_boundary'), '', '别名不是边界：混进 boundary 会让适用条件读不出来')
     assert.equal(pickField(doc, 'auto_title'), '提交语言', '合并时给旧条目补上名称')
     assert.equal(h.readCatalog().entries[first.id].title, '提交语言')
     assert.equal(h.readState().entries[first.id].evidence.length, 2, '两次说法 = 两条证据')
+  } finally { h.done() }
+})
+
+test('merge：显式 slot 写回文件与 catalog（否则按新 slot 找不到，重建还会漂回去）', async () => {
+  const h = harness()
+  try {
+    const first = await h.learner.learn(
+      { text: '所有提交信息都用中文写，不要用英文，因为团队里有人不看英文', key: 'commit-lang', source: 'tool_verified' },
+      cfgOf(),
+      envOf(),
+    )
+    assert.equal(first.ok, true, first.error)
+    const second = await h.learner.learn(
+      { text: '所有提交信息都用中文写，不要写英文，因为团队里有人不看英文', key: 'commit-message-lang', source: 'tool_verified' },
+      cfgOf(),
+      envOf(),
+    )
+    assert.equal(second.merged, true)
+    assert.equal(pickField(h.readDoc(first.id), 'auto_key'), 'commit-message-lang', '文件里的 slot 要跟着新名字')
+    assert.equal(h.readCatalog().entries[first.id].key, 'commit-message-lang', 'catalog 与文件同源')
+    // 没有显式 slot 时不能拿派生出来的 slug 覆盖掉稳定句柄。
+    const third = await h.learner.learn(
+      { text: '所有提交信息都用中文写，不要写英文，因为团队里有人不看英文', source: 'tool_verified' },
+      cfgOf(),
+      envOf(),
+    )
+    assert.equal(third.merged, true)
+    assert.equal(pickField(h.readDoc(first.id), 'auto_key'), 'commit-message-lang', '缺省 slot 不该改写已有的那个')
   } finally { h.done() }
 })
 
@@ -960,7 +989,7 @@ test('organize → applyOrganize(merge)：保留项正文不动、被并项转 s
     const res = await h.learner.applyOrganize(merge)
     assert.equal(res.ok, true, res.error)
     assert.equal(pickField(h.readDoc(b.id), 'auto_status'), 'superseded')
-    assert.match(pickField(h.readDoc(a.id), 'auto_boundary'), /不要写英文/, '被并项的说法要补进保留项的边界')
+    assert.match(pickField(h.readDoc(a.id), 'auto_alias'), /不要写英文/, '被并项的说法要记成保留项的别名')
     assert.equal(h.readState().entries[a.id].evidence.length, 2, '证据并过来，置信度才不会因为少了一条而掉')
 
     // 再算一次不该再出同一对：草案必须以"当前状态"为输入，否则界面点两次都成功。

@@ -52,6 +52,13 @@ export const MAX_AUTO_TITLE_WIDTH = 80
 export const MAX_AUTO_DESCRIPTION = 200
 /** `boundary` 上限：合并时会追加，靠它兜住长度。 */
 const MAX_BOUNDARY = 500
+/**
+ * `auto_alias` 上限：合并进来的**另一种说法**。
+ *
+ * 与 boundary 分开：boundary 回答「什么时候不成立」，alias 回答「同样这件事还说成过什么」。
+ * 混在一个字段里，用户读到的边界会变成一列说法，既判断不了适用条件，也看不出哪句是限制。
+ */
+const MAX_ALIAS = 300
 
 export interface LearnRequest {
   text: string
@@ -594,13 +601,22 @@ export function createLearner(deps: LearnDeps) {
         gate: 'conflict',
       }
     }
-    // 新说法与旧正文不同 → 追加到 boundary（Day 3 的"补边界，不取代"）。
+    // 新说法与旧正文不同 → 记进 `auto_alias`（「同样这件事还说成过什么」）。
+    // 不塞 `auto_boundary`：那个字段回答「什么时候不成立」，混进一列说法后，用户读到的
+    // 边界既判断不了适用条件，也认不出哪句是限制。
     const extra = String(pass.text ?? '').trim()
     const alreadyKnown = normalizeForCompare(existing).includes(normalizeForCompare(extra).slice(0, 24))
-    const prevBoundary = pickField(existing, 'auto_boundary')
-    const nextBoundary = alreadyKnown
-      ? prevBoundary
-      : [prevBoundary, extra].filter((x) => x !== '').join('；').slice(0, MAX_BOUNDARY)
+    const prevAlias = pickField(existing, 'auto_alias')
+    const nextAlias = alreadyKnown ? prevAlias : dedupeAlias(prevAlias, extra)
+    // slot：调用方**显式给了**才跟着改，否则保留目标自己的。
+    //
+    // 合并可能由相似度跨 key 触发，此时 `pass.key` 往往是 `deriveKey(正文)` 拼出来的词 ——
+    // 拿它覆盖会把用户认得的稳定句柄换掉，之后按原 slot 忘掉这条就找不到了。
+    // 而显式 slot 是模型给的稳定句柄：它这次用的是新名字，就该让这条跟着新名字，
+    // 否则按新 slot 忘不掉（文件与 catalog 必须同源，重建才不会漂回去）。
+    const prevKey = pickField(existing, 'auto_key')
+    const explicitKey = String(req.key ?? '').trim()
+    const nextKey = explicitKey !== '' ? explicitKey : prevKey !== '' ? prevKey : pass.key
     // 合并默认保留目标条目自己的状态：重新学到一条已经确认过的记忆，不该把它打回候选；
     // 反过来，合并进候选也不该凭空生效。卡片批准是例外：用户看过新说法并点了同意，
     // 合并后的这条就该生效（否则「批准了却还是候选」又是一次静默失效）。
@@ -615,7 +631,8 @@ export function createLearner(deps: LearnDeps) {
         auto_status: nextStatus,
         auto_updated: nowIso,
         ...(nextTitle !== prevTitle ? { auto_title: nextTitle } : {}),
-        ...(nextBoundary !== prevBoundary ? { auto_boundary: nextBoundary } : {}),
+        ...(nextKey !== prevKey ? { auto_key: nextKey } : {}),
+        ...(nextAlias !== prevAlias ? { auto_alias: nextAlias } : {}),
       },
     )
     await writeFileAtomically(docPath, merged)
@@ -653,7 +670,9 @@ export function createLearner(deps: LearnDeps) {
     const written = await state.write(st)
     if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
 
-    await touchCatalog(targetId, pass, name, req, nowIso, entry.confidence ?? pass.confidence, nextStatus).catch(() => {})
+    // slot 传 `nextKey`：catalog 的 `key` 是 `memory_note` 反查 slot 的依据，写 `pass.key`
+    // 会与文件里的 `auto_key` 分家 —— 下次全量重建又漂回去，期间按 slot 找不到这条。
+    await touchCatalog(targetId, pass, name, req, nowIso, entry.confidence ?? pass.confidence, nextStatus, nextKey).catch(() => {})
     deps.invalidateSnapshot()
     return {
       ok: true,
@@ -665,7 +684,7 @@ export function createLearner(deps: LearnDeps) {
       supersedes: superseded,
       approved: pass.approved,
       ...(pass.autoActive ? { autoActive: true } : {}),
-      note: alreadyKnown ? '已存在同样的说法，只新增了一条证据' : '同一条记忆，把新说法补进了边界',
+      note: alreadyKnown ? '已存在同样的说法，只新增了一条证据' : '同一条记忆，把新说法记成了别名',
       ...(pass.reviewCode !== undefined ? { reviewCode: pass.reviewCode } : {}),
     }
   }
@@ -703,7 +722,12 @@ export function createLearner(deps: LearnDeps) {
     return true
   }
 
-  /** 更新 catalog 的单条卡片（派生数据，失败不影响真相）。 */
+  /**
+   * 更新 catalog 的单条卡片（派生数据，失败不影响真相）。
+   *
+   * `keyOverride`：合并路径要传目标文件里那个 `auto_key`。catalog 的 `key` 与 frontmatter
+   * 必须同源 —— 分家之后，界面按 slot 找到的是旧值，而重建一次又漂回来。
+   */
   async function touchCatalog(
     id: string,
     pass: Extract<GateOutcome, { ok: true }>,
@@ -712,6 +736,7 @@ export function createLearner(deps: LearnDeps) {
     nowIso: string,
     confidence: number,
     statusOverride?: string,
+    keyOverride?: string,
   ): Promise<void> {
     const abs = catalogPathOf(deps.stateDir)
     let catalog: CatalogFile
@@ -730,7 +755,7 @@ export function createLearner(deps: LearnDeps) {
       ...(title !== '' ? { title } : {}),
       status: statusOverride ?? pass.status,
       kind: pass.kind,
-      key: pass.key,
+      key: keyOverride ?? pass.key,
       confidence,
       enabled: true,
       hash: prev?.hash || textHashOf(pass.text),
@@ -1142,7 +1167,7 @@ export function createLearner(deps: LearnDeps) {
       const stripped = rewriteFrontmatterFields(text, {
         origin: 'user',
         auto_title: null, auto_status: null, auto_kind: null, auto_key: null, auto_confidence: null,
-        auto_basis: null, auto_boundary: null, auto_degraded: null, auto_superseded_by: null,
+        auto_basis: null, auto_boundary: null, auto_alias: null, auto_degraded: null, auto_superseded_by: null,
         auto_workspace: null, auto_scene: null, auto_ttl_days: null,
         auto_created: null, auto_updated: null,
       })
@@ -1245,13 +1270,13 @@ export function createLearner(deps: LearnDeps) {
         return { ok: false, code: 'locked', error: `refused: "${keepId}" was edited by the user and is locked.` }
       }
       const nowIso = new Date().toISOString()
-      // 把 drop 的正文补进 keep 的边界：两句话说法不同，但都表达了同一个意思，
-      // 用户下次看 keep 时能认出另一句也指这条（与 learn 的"补边界不取代"同一口径）。
+      // 把 drop 的正文记成 keep 的**别名**：两句话说法不同，但都表达了同一个意思，
+      // 用户下次看 keep 时能认出另一句也指这条（与 learn 合并同一口径）。
       const dropBody = bodyOf(dropText).replaceAll(/\s+/g, ' ').trim().slice(0, 160)
-      const prevBoundary = pickField(keepText, 'auto_boundary')
-      const nextBoundary = dedupeBoundary(prevBoundary, dropBody)
+      const prevAlias = pickField(keepText, 'auto_alias')
+      const nextAlias = dedupeAlias(prevAlias, dropBody)
       await writeFileAtomically(join(notesRoot, keepAt.group, keepAt.name + '.md'), rewriteFrontmatterFields(keepText, {
-        auto_boundary: nextBoundary,
+        ...(nextAlias !== prevAlias ? { auto_alias: nextAlias } : {}),
         auto_updated: nowIso,
       }))
 
@@ -1312,6 +1337,7 @@ export function createLearner(deps: LearnDeps) {
       title: pickField(text, 'auto_title') || '',
       basis: pickField(text, 'auto_basis') || '',
       boundary: pickField(text, 'auto_boundary') || '',
+      alias: pickField(text, 'auto_alias') || '',
       body: bodyOf(text),
       ...(pickField(text, 'auto_degraded') ? { degraded: pickField(text, 'auto_degraded') } : {}),
       state: st
@@ -1767,11 +1793,11 @@ function bodyOf(text: string): string {
   return nl < 0 ? '' : s.slice(nl + 1).trim()
 }
 
-/** 边界追加：已经包含过的不重复加（合并跑两遍不该长出两份）。 */
-function dedupeBoundary(prev: string, add: string): string {
+/** 别名追加：同一条的另一种说法；已经包含过的不重复加（合并跑两遍不该长出两份）。 */
+function dedupeAlias(prev: string, add: string): string {
   const base = String(prev ?? '').trim()
   const extra = String(add ?? '').trim()
   if (extra === '') return base
   if (base.includes(extra)) return base
-  return [base, extra].filter((x) => x !== '').join('；').slice(0, MAX_BOUNDARY)
+  return [base, extra].filter((x) => x !== '').join('；').slice(0, MAX_ALIAS)
 }

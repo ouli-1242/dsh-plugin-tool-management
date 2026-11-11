@@ -172,6 +172,23 @@ export function similarity(a: string, b: string): number {
 /** 同一条的判定阈值：0.82 是「说法的两种版本」，不是「两件事」。 */
 export const MERGE_SIMILARITY = 0.82
 
+// ── 门 1 的一部分：正文里有没有值得记的东西 ───────────────────────────────
+
+/** 至少要有几个实义字符（字母 / 数字 / 汉字）。一个字符的"笔记"只可能是残片。 */
+const MIN_MEANINGFUL_CHARS = 2
+
+/**
+ * 去掉 HTML 标签与标点后剩下的实义字符。
+ *
+ * 为什么要剥标签：真实测试里模型把 `</text>` 当成一条笔记学了进去 —— 它看起来"有内容"，
+ * 实际只是它上一次输出的闭合标签。标签剥掉后没有字母数字，就说明整段都是残片。
+ */
+function meaningfulOf(text: string): string {
+  return String(text ?? '')
+    .replaceAll(/<\/?[A-Za-z][^>]*>/g, ' ')
+    .replaceAll(/[^\p{L}\p{N}]/gu, '')
+}
+
 /** 从正文推 kind。推不准时给 `fact`（最保守：fact 不改变行为，只是信息）。 */
 export function inferKind(text: string): AutoKind {
   const t = String(text ?? '')
@@ -315,6 +332,16 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
     downgraded = '没有给出用户原话，按模型推断处理'
   }
   if (rawText === '') return reject('source', 'nothing to learn: text is empty', '正文为空')
+  // 最低内容质量：纯标点、纯 HTML 残片（`</text>`）、一两个字符的碎片都拒。
+  // 真实测试里模型把自己输出末尾的 `</text>` 学成了一条笔记 —— 它通过了其余八道门，
+  // 因为那些门判的是"这句话该不该记"，没有一道问"这到底是不是一句话"。
+  if (meaningfulOf(rawText).length < MIN_MEANINGFUL_CHARS) {
+    return reject(
+      'source',
+      'not recorded: this is not a sentence — it is only punctuation, markup, or one or two characters. Record the thing itself, in words.',
+      '内容质量门拒绝：没有实义内容（纯标点 / HTML 残片 / 过短）',
+    )
+  }
 
   // ── 门 4 先跑（安全）──
   // 顺序上安全门排在后面，但它**必须**在一切处理之前：安全问题不该等配额判完才发现。
@@ -424,8 +451,17 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
       source = approved ? 'user_approved' : 'model_inference'
       evidence.push({ session: ctx.sessionId ?? '', turn: 0, seq: -1, source, quote: approved ? rawText : quote, at: nowIso })
       if (!decided) setReview('no-cache', '没有可核对的用户原文（本会话还没记录到），先按候选保存')
+    } else if (source === 'user_correction') {
+      // 纠正不要求逐字：用户纠正时常只说「不，用 pnpm」甚至「不对」，而值得记的是
+      // **被纠正这件事**，不是那句原话。这里硬拒等于让绝大多数真实纠正记不下来。
+      // 但也不能把核不上的句子记成用户原话 —— 降级为模型推断（或批准后的
+      // user_approved），证据链里不出现那句引文。
+      source = approved ? 'user_approved' : 'model_inference'
+      evidence.push({ session: ctx.sessionId ?? '', turn: 0, seq: -1, source, quote: approved ? rawText : '', at: nowIso })
+      if (!decided) setReview('inference', '纠正没有逐字引句可核对，按推断保存，确认后才进上下文')
     } else {
-      // 引句对不上就是伪造：卡片批准也不能把它洗白，否则证据链会记下「用户说过」。
+      // `user_explicit` 引句对不上就是伪造：卡片批准也不能把它洗白，否则证据链会记下
+      // 「用户说过」。纠正放宽，明说原话不放宽 —— 两者的证据强度差就在这里。
       return reject(
         'evidence',
         'refused: the quote is not a verbatim substring of anything the user said in this conversation. Quote their exact words, or pass source="model_inference" if it is your own inference.',

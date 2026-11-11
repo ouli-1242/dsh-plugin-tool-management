@@ -197,6 +197,41 @@ test('新颖门：只对模型推断生效 —— 用户明说的偏好即使可
   assert.equal(explicit.ok, true)
 })
 
+test('内容质量门：纯标点 / HTML 残片 / 过短的碎片一律拒绝', () => {
+  // 真实测试里模型把自己输出末尾的 `</text>` 当成一条笔记学了进去 —— 其余八道门
+  // 判的都是"这句话该不该记"，没有一道问"这到底是不是一句话"。
+  for (const text of ['</text>', '。。。', '!', '嗯', '<div class="x"></div>']) {
+    const r = runGates({ text, source: 'tool_verified' }, ctxOf())
+    assert.equal(r.ok, false, text)
+    assert.equal(r.gate, 'source', text)
+  }
+  // 正常内容不误伤：一个两字的结论也要能记。
+  assert.equal(runGates({ text: '用 pnpm', source: 'tool_verified' }, ctxOf()).ok, true)
+})
+
+test('证据门：user_correction 不要求逐字，user_explicit 仍要求', () => {
+  captureUserTexts('s-correction', [{ role: 'user', content: '不对，这个仓库要用 pnpm' }])
+  try {
+    // 纠正时常只说「不对」：核不上的引句降级为推断，而不是硬拒。
+    const corrected = runGates(
+      { text: '这个仓库用 pnpm', source: 'user_correction', quote: '这个仓库应该用 pnpm 才对' },
+      ctxOf({ sessionId: 's-correction' }),
+    )
+    assert.equal(corrected.ok, true)
+    assert.equal(corrected.source, 'model_inference')
+    assert.equal(corrected.status, 'candidate')
+    // 明说原话核不上仍是伪造：证据链不能记下「用户说过」。
+    const explicit = runGates(
+      { text: '这个仓库用 pnpm', source: 'user_explicit', quote: '这个仓库应该用 pnpm 才对' },
+      ctxOf({ sessionId: 's-correction' }),
+    )
+    assert.equal(explicit.ok, false)
+    assert.equal(explicit.gate, 'evidence')
+  } finally {
+    clearUserTexts('s-correction')
+  }
+})
+
 test('来源门：说「用户明说」却不给引句 → 降级为推断，不是拒绝', () => {
   const r = runGates({ text: '这个仓库用 pnpm', source: 'user_explicit' }, ctxOf())
   assert.equal(r.ok, true)
@@ -444,7 +479,7 @@ test('自动段：同输入必须逐字节相同（否则每轮重发整段）�
   const a = renderAutoLayer('workspace', input)
   const b = renderAutoLayer('workspace', input)
   assert.equal(a.text, b.text)
-  // 标题由注入框架（`# Learned notes`）提供，正文再写 `##` 会变成两个层级。
+  // 标题由注入框架（`# Learned notes` / `# Workspace notes`）提供，正文再写 `##` 会变成两个层级。
   assert.doesNotMatch(a.text, /^#/m)
   assert.match(a.text, /^- \*\*package-manager\*\* — 这个仓库用 pnpm/m, '正文从条目开始，不带类型标签')
   assert.match(a.text, /\*\*Learned notes;[\s\S]*complete set\.\*\*\n$/, '收尾句收在最后')
