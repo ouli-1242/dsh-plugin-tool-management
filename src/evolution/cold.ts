@@ -64,7 +64,17 @@ const BATCH = 3
 /** checkpoint 纯文本的字节上限：它已经是一份摘要，再长就该截断，不能撑爆复习提示。 */
 export const MAX_CHECKPOINT_BYTES = 12_000
 
-/** 官方 `compaction/summary` 的 `data.summary`：只取 text 块拼成纯文本。 */
+/** 超限时留给尾部的比例：官方模板把 `Critical Context`（偏好 / 约束）放在**最后一节**。 */
+const TAIL_SHARE = 0.5
+
+/**
+ * 官方 `compaction/summary` 的 `data.summary`：只取 text 块拼成纯文本。
+ *
+ * 超限时**保头也保尾、砍中间**。官方的 `COMPACTION_INSTRUCTION` 章节顺序是
+ * Primary Request → Key Technical Concepts → Files and Code → Errors → Pending →
+ * Current Work → Next Step → Critical Context：最该学的「用户偏好 / 约束」在**最后**，
+ * 而中间几节正是复习提示明确要求丢弃的任务态。只保头会把唯一有价值的那一节砍掉。
+ */
 export function checkpointTextOf(summary: unknown): string {
   if (!Array.isArray(summary)) return ''
   const parts: string[] = []
@@ -76,16 +86,40 @@ export function checkpointTextOf(summary: unknown): string {
   }
   const text = parts.join('\n').trim()
   if (Buffer.byteLength(text, 'utf8') <= MAX_CHECKPOINT_BYTES) return text
+  const budget = MAX_CHECKPOINT_BYTES
+  const tailBudget = Math.floor(budget * TAIL_SHARE)
+  const headBudget = budget - tailBudget
   // 按字符截，不按字节切：中文 / emoji 被切半个会变成乱码。
-  let out = ''
-  let bytes = 0
-  for (const ch of text) {
-    const size = Buffer.byteLength(ch, 'utf8')
-    if (bytes + size > MAX_CHECKPOINT_BYTES) break
-    out += ch
-    bytes += size
+  const takeHead = (limit: number): string => {
+    let out = ''
+    let bytes = 0
+    for (const ch of text) {
+      const size = Buffer.byteLength(ch, 'utf8')
+      if (bytes + size > limit) break
+      out += ch
+      bytes += size
+    }
+    return out
   }
-  return out
+  const takeTail = (limit: number): string => {
+    const chars = [...text]
+    let out = ''
+    let bytes = 0
+    for (let i = chars.length - 1; i >= 0; i--) {
+      const size = Buffer.byteLength(chars[i]!, 'utf8')
+      if (bytes + size > limit) break
+      out = chars[i]! + out
+      bytes += size
+    }
+    return out
+  }
+  const head = takeHead(headBudget)
+  const tail = takeTail(tailBudget)
+  const omitted = Buffer.byteLength(text, 'utf8') - Buffer.byteLength(head, 'utf8') - Buffer.byteLength(tail, 'utf8')
+  const marker = `\n\n[… ${omitted} bytes of the middle omitted …]\n\n`
+  // 标记本身也占字节：从头部额度里扣掉，保证整段不越过上限。
+  const room = budget - Buffer.byteLength(marker, 'utf8')
+  return takeHead(room - tailBudget) + marker + tail
 }
 
 export function createColdPath(deps: ColdPathDeps): ColdPathHandle {

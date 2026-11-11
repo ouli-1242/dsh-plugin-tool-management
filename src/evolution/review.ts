@@ -19,14 +19,20 @@ import { dirname } from 'node:path'
 import { writeFileAtomically } from '../memories/index-io.js'
 import type { Episode } from './digest.js'
 import type { OutboxItem, ReviewLearnedItem } from './episodes.js'
-import { MAX_AUTO_TEXT_WIDTH, MAX_AUTO_TITLE_WIDTH, type Learner } from './write.js'
+import { MAX_AUTO_TITLE_WIDTH, type Learner } from './write.js'
 import { truncateToWidth } from '../text-width.js'
 import { normalizeNoteStyle, noteStyleGuideOf, type CustomNoteStyle, type EffectiveEvolutionConfig } from './config.js'
 
 /** 一次复习最多落几条。多了就是在把摘要改写成记忆库，那不是复习。 */
 export const MAX_ITEMS_PER_REVIEW = 3
-/** 单次请求的输出上限（token）。 */
-const MAX_OUTPUT_TOKENS = 900
+/**
+ * 单次请求的输出上限（token）。
+ *
+ * 必须装得下 `MAX_ITEMS_PER_REVIEW` 条**满配**正文：一条 800 显示单位 ≈ 400 汉字，
+ * 三条中文正文加上 JSON 包装就已经超过 900 —— 那时输出被截断，`extractJson` 解析不出来，
+ * 整批按 `bad-json` 重试到死信。2000 留了足够的余量（三条满配中文 ≈ 1300）。
+ */
+const MAX_OUTPUT_TOKENS = 2000
 /** 单次请求的超时。超了就按失败处理，下一轮再试。 */
 const REVIEW_TIMEOUT_MS = 45_000
 
@@ -86,7 +92,10 @@ export function parseReviewItems(raw: unknown): ReviewItem[] {
     if (out.length >= MAX_ITEMS_PER_REVIEW) break
     if (!row || typeof row !== 'object') continue
     const r = row as Record<string, unknown>
-    const text = typeof r.text === 'string' ? truncateToWidth(r.text.trim(), MAX_AUTO_TEXT_WIDTH) : ''
+    // 正文**不在这里截**：超限交给写入管线拒（`too-long`），与热路径同一条规矩。
+    // 在这里截会存下一句被腰斩的话，而用户看不到任何提示 —— 那正是本版修掉的
+    // 「静默截断」。截断只留给展示字段（标题）。
+    const text = typeof r.text === 'string' ? r.text.trim() : ''
     const source = typeof r.source === 'string' && SOURCES.has(r.source) ? (r.source as ReviewItem['source']) : 'model_inference'
     if (text === '') continue
     const item: ReviewItem = { text, source }

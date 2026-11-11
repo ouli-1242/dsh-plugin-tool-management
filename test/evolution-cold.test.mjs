@@ -141,7 +141,20 @@ test('checkpointTextOf：只取 text 块、拼成纯文本、按字节截但不�
   assert.equal(checkpointTextOf([{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }]), 'a\nb')
   const long = checkpointTextOf([{ type: 'text', text: '汉'.repeat(MAX_CHECKPOINT_BYTES) }])
   assert.ok(Buffer.byteLength(long, 'utf8') <= MAX_CHECKPOINT_BYTES)
-  assert.equal(long, '汉'.repeat(Math.floor(MAX_CHECKPOINT_BYTES / 3)))
+  // 超限时砍中间、保两端：官方模板把「用户偏好 / 约束」放在最后一节 Critical Context，
+  // 只保头会把唯一有价值的那一节丢掉，留下的全是复习提示要求丢弃的任务态。
+  assert.match(long, /^汉+/, '头部保留')
+  assert.match(long, /汉+$/, '尾部保留')
+  assert.match(long, /middle omitted/)
+})
+
+test('checkpointTextOf：超长时保住末尾的 Critical Context', () => {
+  const body = '## Primary Request and Intent\n' + '- filler line\n'.repeat(2000)
+  const tail = '## Critical Context\n- 用户希望所有回答用中文\n- 提交信息必须中文'
+  const out = checkpointTextOf([{ type: 'text', text: body + tail }])
+  assert.ok(Buffer.byteLength(out, 'utf8') <= MAX_CHECKPOINT_BYTES)
+  assert.ok(out.includes('用户希望所有回答用中文'), '末尾那一节必须活下来')
+  assert.ok(out.startsWith('## Primary Request and Intent'), '开头也要留')
 })
 
 test('checkpointEpisodeOf：id 用官方 seq，不带用户原话，reason 是 compaction', () => {
@@ -493,7 +506,7 @@ test('reviewer：`model` 只写 model 时沿用会话的 provider', async () => 
   const r = createReviewer({ llm, learner: fakeLearner(), budget, catalogLines: async () => [], log, message })
   await r.review(episodeOf(digestOf(1), { session: 's1', at: 'x', reason: 'signal' }), cfgOf({ model: 'fast-model' }), { provider: 'live-provider', model: 'live-model' })
   // 输出上限必须与路由一起进 `prepareCall`（放进 dispatch 会被官方判成配置变化）。
-  assert.deepEqual(llm.calls[0], { provider: 'live-provider', model: 'fast-model', temperature: 0, maxTokens: 900 })
+  assert.deepEqual(llm.calls[0], { provider: 'live-provider', model: 'fast-model', temperature: 0, maxTokens: 2000 })
 })
 
 test('reviewer：输出不是 JSON → bad-json，可重试且不占学习名额', async () => {
