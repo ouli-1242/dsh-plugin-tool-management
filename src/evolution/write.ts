@@ -737,6 +737,7 @@ export function createLearner(deps: LearnDeps) {
     confidence: number,
     statusOverride?: string,
     keyOverride?: string,
+    boundaryOverride?: string,
   ): Promise<void> {
     const abs = catalogPathOf(deps.stateDir)
     let catalog: CatalogFile
@@ -750,9 +751,13 @@ export function createLearner(deps: LearnDeps) {
     // 合并路径保留原来的摘要与标题；目标还没有标题时，用本次请求补一个。
     const oneLine = prev?.oneLine ?? describeOf(pass.text, req.description)
     const title = prev?.title || titleOf(req.title)
+    // 边界：编辑路径显式给（正文里的边界行变了）；新建取本次请求；合并时目标文件里的
+    // `auto_boundary` 没被动过，保留旧值。
+    const boundary = boundaryOverride ?? prev?.boundary ?? String(req.boundary ?? '').trim().slice(0, MAX_BOUNDARY)
     catalog.entries[id] = catalogEntryOf(id, pass.layer, {
       oneLine,
       ...(title !== '' ? { title } : {}),
+      ...(boundary !== '' ? { boundary } : {}),
       status: statusOverride ?? pass.status,
       kind: pass.kind,
       key: keyOverride ?? pass.key,
@@ -774,7 +779,7 @@ export function createLearner(deps: LearnDeps) {
    * 用户删了个寂寞，还看不出为什么。
    */
   async function patchCatalogEntry(id: string, patch: Partial<{
-    status: string; enabled: boolean; confidence: number; title: string
+    status: string; enabled: boolean; confidence: number; title: string; boundary: string
     oneLine: string; bytes: number; estTokens: number; hash: string; mtime: number; size: number
   }>): Promise<void> {
     try {
@@ -787,6 +792,11 @@ export function createLearner(deps: LearnDeps) {
       if (patch.title !== undefined) {
         if (patch.title === '') delete next.title
         else next.title = patch.title
+      }
+      // 边界同理：用户把正文里的边界行删了，这里要跟着消失，否则注入会继续显示旧条件。
+      if (patch.boundary !== undefined) {
+        if (patch.boundary === '') delete next.boundary
+        else next.boundary = patch.boundary
       }
       catalog.entries[id] = next
       catalog.builtAt = new Date().toISOString()
@@ -1429,6 +1439,10 @@ export function createLearner(deps: LearnDeps) {
       const oneLine = describeOf(body)
       // `undefined` = 这次不动名称；空串 = 用户清空了名称（删掉字段，列表按首句兜底）。
       const nextTitle = title === undefined ? undefined : titleOf(title)
+      // 边界行（`边界：…` / `Boundary: …`）是正文的一部分，注入行另从 `auto_boundary` 读。
+      // 两处必须同源：用户在这里删掉 / 改写那一行，frontmatter 不跟着变的话，注入会继续
+      // 显示用户刚删掉的条件 —— 而界面的正文里已经没有了。
+      const nextBoundary = boundaryOfBody(body)
       // description 是 catalog 重建时的一行摘要来源：只改正文不写它，下一次重建就会
       // 把列表与注入行退回到旧说法。
       const next = rewriteFrontmatterFields(
@@ -1436,6 +1450,7 @@ export function createLearner(deps: LearnDeps) {
         {
           description: oneLine,
           auto_updated: new Date().toISOString(),
+          auto_boundary: nextBoundary === '' ? null : nextBoundary,
           ...(nextTitle !== undefined ? { auto_title: nextTitle === '' ? null : nextTitle } : {}),
         },
         body + '\n',
@@ -1455,6 +1470,7 @@ export function createLearner(deps: LearnDeps) {
         hash: createHash('sha256').update(next).digest('hex'),
         mtime: Date.now(),
         size: Buffer.byteLength(next, 'utf8'),
+        boundary: nextBoundary,
         ...(nextTitle !== undefined ? { title: nextTitle } : {}),
       })
       deps.invalidateSnapshot()
@@ -1725,6 +1741,20 @@ export function ttlDaysOf(kind: AutoKind, explicit?: number): number {
   // 字段必须有数，而扫描侧对 `kind === 'preference'` 直接跳过。
   if (kind === 'fact' || kind === 'procedure') return 30
   return 3650
+}
+
+/**
+ * 正文里的边界行 → 边界字段（`renderBody` 的逆操作）。
+ *
+ * 认两种写法：写入时用的 `边界：…`，以及卡片 / 模型可能写下的 `Boundary: …`。
+ * 只取第一处：`renderBody` 只产出这一行，多出来的同形行属于正文本身，不该被吞掉。
+ */
+function boundaryOfBody(body: string): string {
+  for (const line of String(body ?? '').split('\n')) {
+    const hit = /^\s*(?:边界|Boundary)\s*[:：]\s*(.*)$/i.exec(line)
+    if (hit !== null) return String(hit[1] ?? '').trim().slice(0, MAX_BOUNDARY)
+  }
+  return ''
 }
 
 /** 正文：一句话结论，加一行边界（有的话）。 */
