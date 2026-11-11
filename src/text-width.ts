@@ -49,3 +49,15 @@ export function truncateToWidth(text: string, maxWidth: number): string {
   }
   return out
 }
+
+/**
+ * 单行摘要：压平空白后按显示宽度截断，超限补 `…`。
+ *
+ * 只用于界面扫读（列表行、清单），**不用于注入** —— 注入用完整正文。截断留出 `…`
+ * 自身的宽度，否则摘要会比上限多一个单位。
+ */
+export function excerptOf(text: string, maxWidth = 160): string {
+  const flat = String(text ?? '').replace(/\s+/g, ' ').trim()
+  if (textWidthOf(flat) <= maxWidth) return flat
+  return truncateToWidth(flat, Math.max(1, maxWidth - 1)) + '…'
+}
