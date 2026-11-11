@@ -549,12 +549,19 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
     // 载体让位（官方 `skill` 在场 → 藏 `skill_manager_read`）同样必须进同步段：
     // 判据只是 `tools.get(name, agent)`，同步可得。漏掉这一条的后果与 issue #29 一模一样 ——
     // 子代理首轮工具表里两条都在，随后异步段才摘掉一条，轨迹上就是「移除工具」。
+    //
+    // 单独收一份而不是并进 `wanted`：它**不受会话 allow 影响**。让位判的是"官方等价物
+    // 已经在场，这条只是重复"，不是用户的可见性偏好 —— 会话把一条本不该在清单里的重复
+    // 工具重新打开，语义上说不通。并进 `wanted` 会让 allow 赢过它，而异步段
+    // （`restrictAgent`）的 `extra` 是加在 allow 之后的 —— 两段对同一份名单给出相反结论，
+    // 于是首轮有、第二步没，轨迹上又是一次「移除工具」。
+    const carrier = new Set<string>()
     if (deps.carrierHiddenTools) {
       try {
         const hidden = deps.carrierHiddenTools(agent)
         // 异步实现拿不到这一轮结果：交给 `restrictAgent` 补（那一轮会重装并上报）。
         if (typeof (hidden as Promise<unknown>)?.then !== 'function') {
-          for (const name of hidden as string[]) wanted.add(name)
+          for (const name of hidden as string[]) carrier.add(name)
         }
       } catch { /* 判据失败 = 不让位（宁可多花 token，也不让模型少一条路） */ }
     }
@@ -574,7 +581,8 @@ export function createToolVisibility(deps: ToolVisibilityDeps): ToolVisibility {
     const allowSet = disabledToolsState() === 'unknown'
       ? new Set([...allow].filter((name) => !name.startsWith(MCP_TOOL_PREFIX)))
       : new Set(allow)
-    const names = [...wanted].filter((name) => !allowSet.has(name))
+    // 与 `restrictAgent` 同形：会话 allow 只减全局那半边，载体让位加在它之后。
+    const names = [...new Set([...[...wanted].filter((name) => !allowSet.has(name)), ...carrier])]
     // 官方 `restrict` 对认不出的名字是整份名单抛错。同步段没有注册全集可求交，
     // 改问全局视图（同步、无 I/O）；已被限制摘掉的名字在这里仍算 known。
     return typeof deps.tools.get === 'function'
