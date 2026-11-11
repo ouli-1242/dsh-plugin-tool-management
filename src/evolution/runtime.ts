@@ -186,8 +186,15 @@ export interface AutoSnapshotKeyParts {
    * 分层的版本号反而要记得两边都 bump，漏一边就会让旧说法继续注入。
    */
   revision?: number
-  /** 用户记忆段的预算档位：跨过 8K / 24K 阈值时该层要按新预算重算。 */
-  budgetMode?: 'none' | 'min' | 'zero'
+  /**
+   * 共享注入总盘（字节）。一般不变，但配置可调（`rulesMaxBytes`）—— 变了要重算。
+   */
+  totalBytes?: number
+  /**
+   * 更高优先级内容已占掉的字节（手写记忆段 + 全局自主段）。它变了说明余量变了，
+   * 该层该按新余量重新决定装哪几条。
+   */
+  reservedBytes?: number
 }
 
 export function autoSnapshotKey(parts: AutoSnapshotKeyParts): string {
@@ -199,7 +206,8 @@ export function autoSnapshotKey(parts: AutoSnapshotKeyParts): string {
     parts.enabled ? '1' : '0',
     parts.inject ? '1' : '0',
     String(parts.revision ?? 0),
-    parts.budgetMode ?? 'none',
+    String(parts.totalBytes ?? 0),
+    String(parts.reservedBytes ?? 0),
   ].join('|')
 }
 

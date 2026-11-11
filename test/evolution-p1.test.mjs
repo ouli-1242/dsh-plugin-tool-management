@@ -13,7 +13,7 @@ import { autoIncrementalModeKey, autoSnapshotKey } from '../lib/evolution/runtim
 import { confidenceOf, textHashOf, makeTombstone, tombstoneActive, tombstonedBy, emptyState } from '../lib/evolution/state.js'
 import { captureUserTexts, clearUserTexts } from '../lib/evolution/evidence.js'
 import { NOTE_STYLE_GUIDE, normalizeNoteStyle, noteStyleGuideOf, noteStyleLineOf, resolveEffectiveConfig, DEFAULT_EVOLUTION_SETTINGS } from '../lib/evolution/config.js'
-import { renderAutoLayer, autoBudgetOf, competitorBudgetOfLayer, budgetModeOf, lineOf, INJECT_BOUNDARY_MAX_WIDTH } from '../lib/memories/render-auto.js'
+import { renderAutoLayer, remainingBytesOf, lineOf } from '../lib/memories/render-auto.js'
 import { appendToSceneGroup } from '../lib/memories/projection.js'
 import { visibleExistingEntries } from '../lib/evolution/write.js'
 import { textWidthOf } from '../lib/text-width.js'
@@ -42,11 +42,12 @@ const passOf = (over) => runGates({ text: '这个仓库用 pnpm', source: 'user_
 /**
  * 一条 catalog 卡片。
  *
- * `oneLine` 默认跟 `id` 一致 —— 注入渲染的是 `oneLine`（正文那一行），不是 id
- * （只有 procedure 行才带 `id:`）。断言时看 id 会误判成"没注入"。
+ * `body` 是注入用的完整正文，`oneLine` 只是列表摘要 —— 不给 `body` 时退成 `oneLine`，
+ * 与真实 catalog 的旧数据兼容路径一致。
  */
 const entryOf = (over = {}) => {
   const id = over.id ?? 'x'
+  const oneLine = over.oneLine ?? id
   return {
     id,
     layer: 'global',
@@ -56,7 +57,8 @@ const entryOf = (over = {}) => {
     kind: 'fact',
     key: '',
     status: 'active',
-    oneLine: id,
+    body: oneLine,
+    oneLine,
     bytes: 10,
     estTokens: 4,
     confidence: 0.9,
@@ -429,26 +431,24 @@ test('墓碑：原文相似也拦 —— 换个 key 或改一个字都不能让�
   assert.equal(tombstoneBlocked(ctx, 'deploy', '发布前先跑 lint'), undefined)
 })
 
-test('快照键：分层 + 用户动作版本号 + 预算档位，学习写入不触发重发', () => {
+test('快照键：分层 + 用户动作版本号 + 余量，学习写入不触发重发', () => {
   const base = { layer: 'global', sessionId: 's-1', workspaceHash: 'w', scenes: ['code'], enabled: true, inject: true }
   assert.notEqual(autoSnapshotKey({ ...base, revision: 1 }), autoSnapshotKey({ ...base, revision: 0 }))
   // 旧调用方没传 revision 时与 0 同键：升级本身不该让所有会话重发一次整段。
   assert.equal(autoSnapshotKey(base), autoSnapshotKey({ ...base, revision: 0 }))
   // 两层必须不同键：共用一份快照会让批准一层时把另一层也重建。
   assert.notEqual(autoSnapshotKey({ ...base, layer: 'workspace' }), autoSnapshotKey(base))
-  // 用户记忆跨过预算阈值时该层要按新预算重算。
-  assert.notEqual(autoSnapshotKey({ ...base, budgetMode: 'min' }), autoSnapshotKey(base))
-  assert.equal(budgetModeOf(0), 'none')
-  assert.equal(budgetModeOf(10_000), 'min')
-  assert.equal(budgetModeOf(30_000), 'zero')
+  // 手写记忆段变大 → 自动段的余量变了，必须按新余量重算。
+  assert.notEqual(autoSnapshotKey({ ...base, reservedBytes: 4096 }), autoSnapshotKey(base))
+  assert.notEqual(autoSnapshotKey({ ...base, totalBytes: 1024 }), autoSnapshotKey(base))
 })
 
-test('增量模式键不含 revision：学习 / 删除不触发全量，预算档 / 场景变化才触发', () => {
+test('增量模式键不含 revision：学习 / 删除不触发全量，余量 / 场景变化才触发', () => {
   const base = { layer: 'global', sessionId: 's-1', workspaceHash: 'w', scenes: ['code'], enabled: true, inject: true }
   // 确认 / 学习 / 删除都会 bump revision；它们改变的是条目集合，差集能表达。
   assert.equal(autoIncrementalModeKey(base), autoIncrementalModeKey({ ...base, revision: 99 }))
   // 这些改变的是分组 / 入选集合，差集表达不了，必须回全量。
-  assert.notEqual(autoIncrementalModeKey({ ...base, budgetMode: 'min' }), autoIncrementalModeKey(base))
+  assert.notEqual(autoIncrementalModeKey({ ...base, reservedBytes: 4096 }), autoIncrementalModeKey(base))
   assert.notEqual(autoIncrementalModeKey({ ...base, scenes: ['other'] }), autoIncrementalModeKey(base))
   assert.notEqual(autoIncrementalModeKey({ ...base, layer: 'workspace' }), autoIncrementalModeKey(base))
   assert.notEqual(autoIncrementalModeKey({ ...base, inject: false }), autoIncrementalModeKey(base))
@@ -477,7 +477,7 @@ const wsEntry = (over = {}) => entryOf({
 })
 
 test('自动段：同输入必须逐字节相同（否则每轮重发整段），正文不含标题', () => {
-  const input = { entries: [wsEntry()], state: emptyState(), scope: { workspaceHash: 'abcd1234abcd1234' }, userSegmentTokens: 0 }
+  const input = { entries: [wsEntry()], state: emptyState(), scope: { workspaceHash: 'abcd1234abcd1234' }, totalBytes: 262144, reservedBytes: 0 }
   const a = renderAutoLayer('workspace', input)
   const b = renderAutoLayer('workspace', input)
   assert.equal(a.text, b.text)
@@ -490,51 +490,39 @@ test('自动段：同输入必须逐字节相同（否则每轮重发整段）�
 test('注入行：不带内部 id（流程 / playbook 也一样）', () => {
   // id 是磁盘目录（`_ws/<hash16>/<slug>`），对模型和用户都没有意义。定位靠
   // `memory_get` 的 id / slot / 名称 / 注入行首句四种写法，后三种注入行里都有。
-  const proc = wsEntry({ kind: 'procedure', title: '发布流程', oneLine: '先跑构建再打 tag' })
-  assert.equal(lineOf(proc), '- **发布流程** — 先跑构建再打 tag')
+  const proc = wsEntry({ kind: 'procedure', title: '发布流程', body: '先跑构建再打 tag', oneLine: '先跑构建再打 tag' })
+  assert.equal(lineOf(proc), '- **发布流程** — 先跑构建再打 tag\n')
   assert.doesNotMatch(lineOf(proc), /_ws\/|\(id:/)
   const book = wsEntry({ status: 'playbook', title: '发布流程' })
-  assert.equal(lineOf(book), '- **发布流程** — playbook; read the full note for steps')
+  assert.equal(lineOf(book), '- **发布流程** — playbook; read the full note for steps\n')
   assert.doesNotMatch(lineOf(book), /\(id:/)
 })
 
-test('注入行：边界附在行末，超长按显示宽度截断', () => {
-  const withBoundary = wsEntry({ boundary: '只在这个仓库里' })
-  assert.equal(lineOf(withBoundary), '- **package-manager** — 这个仓库用 pnpm (boundary: 只在这个仓库里)')
-  // 流程 / playbook 行同样带边界：适用条件与类型无关。
-  const proc = wsEntry({ kind: 'procedure', title: '发布流程', oneLine: '先跑构建再打 tag', boundary: '只在发布流程用' })
-  assert.match(lineOf(proc), / \(boundary: 只在发布流程用\)$/)
-  const book = wsEntry({ status: 'playbook', title: '发布流程', boundary: '只在发布流程用' })
-  assert.match(lineOf(book), / \(boundary: 只在发布流程用\)$/)
-  // 超过 INJECT_BOUNDARY_MAX_WIDTH 截断并加省略号（不把一句完整的话截成半句还不标出来）。
-  const long = wsEntry({ boundary: '很'.repeat(INJECT_BOUNDARY_MAX_WIDTH) })
-  const line = lineOf(long)
-  assert.match(line, /…\)$/)
-  assert.ok(textWidthOf(line) < textWidthOf('- **package-manager** — 这个仓库用 pnpm (boundary: ' + '很'.repeat(INJECT_BOUNDARY_MAX_WIDTH) + ')'))
-  // 没有边界时行不变（不出现空括号）。
-  assert.doesNotMatch(lineOf(wsEntry()), /boundary/)
+test('注入块：正文完整进上下文，不截断', () => {
+  // 边界行本来就写在正文里（落盘时 `renderBody` 拼在末尾），注入不再另附一份 ——
+  // 再附一次会让同一句话在上下文里出现两遍。
+  const long = '很'.repeat(3000)
+  const r = lineOf(wsEntry({ body: long, oneLine: '摘要' }))
+  assert.ok(r.includes(long), '完整正文必须在块里')
+  assert.ok(!r.includes('…'), '注入不截断正文')
+  // 多行正文走围栏块（与手写记忆同构），单行压成一行。
+  const multi = lineOf(wsEntry({ body: '第一行\n第二行' }))
+  assert.match(multi, /```/, '多行正文用围栏块')
+  assert.match(lineOf(wsEntry({ body: '一句话' })), /^- \*\*package-manager\*\* — 一句话\n$/)
 })
 
-test('注入行：英文边界按词截断，不留半个单词', () => {
-  // 显示宽度口径下英文拿到两倍字符数：160 宽 ≈ 160 字母，够放两句话。
-  const full = 'Applies to full-coverage testing, regression verification or acceptance; skip one-off quick checks.'
-  assert.ok(textWidthOf(full) <= INJECT_BOUNDARY_MAX_WIDTH, '整句不该被截')
-  assert.match(lineOf(wsEntry({ boundary: full })), / \(boundary: Applies to full-coverage testing, regression verification or acceptance; skip one-off quick checks\.\)$/)
-
-  // 超长时不能切在单词中间：截断点前的最后一个词必须完整。
-  const long = 'Coverage must include every branch of the feature matrix, including error paths and retries, because sampling hides the failure modes we care about most in this repository.'
-  const text = lineOf(wsEntry({ boundary: long }))
-  const shown = /\(boundary: (.*)\)$/.exec(text)?.[1] ?? ''
-  assert.match(shown, /…$/)
-  // 去掉省略号后应当是原句的前缀，且前缀之后原文紧接着一个空白 —— 即停在词边界。
-  const head = shown.slice(0, -1).trimEnd()
-  assert.ok(long.startsWith(head), '截断结果必须是原文前缀')
-  assert.match(head, /[\p{L}\p{N}]$/u, '不能停在空白或标点')
-  assert.equal(long[head.length], ' ', '前缀之后原文必须是空白：停在词边界，不是词中间')
+test('注入块：边界随正文一起进，不另附括号', () => {
+  const withBoundary = wsEntry({ body: '这个仓库用 pnpm\n\n边界：只在这个仓库里' })
+  const line = lineOf(withBoundary)
+  assert.match(line, /边界：只在这个仓库里/)
+  assert.doesNotMatch(line, /\(boundary:/, '不再另附一份边界')
+  // playbook 只放标题（不展开步骤），也不附边界。
+  const book = wsEntry({ status: 'playbook', title: '发布流程', body: '步骤一\n步骤二' })
+  assert.equal(lineOf(book), '- **发布流程** — playbook; read the full note for steps\n')
 })
 
 test('自动段：不注入风格行；授权语收在条目之后', () => {
-  const input = { entries: [wsEntry()], state: emptyState(), scope: { workspaceHash: 'abcd1234abcd1234' }, userSegmentTokens: 0 }
+  const input = { entries: [wsEntry()], state: emptyState(), scope: { workspaceHash: 'abcd1234abcd1234' }, totalBytes: 262144, reservedBytes: 0 }
   const r = renderAutoLayer('workspace', input)
   // 风格是写新笔记时的指引，不是当前上下文该看到的信息。
   assert.doesNotMatch(r.text, /House style/)
@@ -607,7 +595,7 @@ test('自动段带上非默认风格行：默认档不注入，body 只放条目
     entries: [entryOf({ id: 'w-a', layer: 'workspace', workspace: 'abcd1234abcd1234', oneLine: '工作区条目' })],
     state: emptyState(),
     scope: { workspaceHash: 'abcd1234abcd1234' },
-    userSegmentTokens: 0,
+    totalBytes: 262144, reservedBytes: 0,
   }
   const plain = renderAutoLayer('workspace', input)
   assert.ok(!plain.text.includes('When saving a new learned note'), '默认档不注入风格行')
@@ -625,11 +613,11 @@ test('自动段：全局层只收全局，工作区块只收本工作区与旧�
     entryOf({ id: '_session/s-2/other', layer: 'session', session: 's-2', oneLine: '别的会话旧条目' }),
   ]
   const scope = { workspaceHash: 'abcd1234abcd1234', sessionId: 's-1' }
-  const g = renderAutoLayer('global', { entries, state: emptyState(), scope, userSegmentTokens: 0 })
+  const g = renderAutoLayer('global', { entries, state: emptyState(), scope, totalBytes: 262144, reservedBytes: 0 })
   assert.match(g.text, /全局条目/)
   assert.doesNotMatch(g.text, /本项目条目/)
   assert.doesNotMatch(g.text, /别的项目条目/)
-  const w = renderAutoLayer('workspace', { entries, state: emptyState(), scope, userSegmentTokens: 0 })
+  const w = renderAutoLayer('workspace', { entries, state: emptyState(), scope, totalBytes: 262144, reservedBytes: 0 })
   assert.doesNotMatch(w.text, /全局条目/, '全局条目不进工作区块')
   assert.match(w.text, /本项目条目/)
   assert.doesNotMatch(w.text, /别的项目条目/)
@@ -640,16 +628,16 @@ test('自动段：全局层只收全局，工作区块只收本工作区与旧�
 test('自动段：新增一层的条目不改另一层的正文（拆域的意义）', () => {
   const scope = { workspaceHash: 'abcd1234abcd1234' }
   const wsOnly = [wsEntry()]
-  const wsBefore = renderAutoLayer('workspace', { entries: wsOnly, state: emptyState(), scope, userSegmentTokens: 0 }).text
+  const wsBefore = renderAutoLayer('workspace', { entries: wsOnly, state: emptyState(), scope, totalBytes: 262144, reservedBytes: 0 }).text
   const wsAfter = renderAutoLayer('workspace', {
     entries: [...wsOnly, entryOf({ id: 'global-new', oneLine: '新增的全局条目' })],
-    state: emptyState(), scope, userSegmentTokens: 0,
+    state: emptyState(), scope, totalBytes: 262144, reservedBytes: 0,
   }).text
   assert.equal(wsAfter, wsBefore, '新增全局条目不该改变工作区块的正文')
-  const globalBefore = renderAutoLayer('global', { entries: [entryOf({ id: 'global-a', oneLine: '全局条目' })], state: emptyState(), scope, userSegmentTokens: 0 }).text
+  const globalBefore = renderAutoLayer('global', { entries: [entryOf({ id: 'global-a', oneLine: '全局条目' })], state: emptyState(), scope, totalBytes: 262144, reservedBytes: 0 }).text
   const globalAfter = renderAutoLayer('global', {
     entries: [entryOf({ id: 'global-a', oneLine: '全局条目' }), wsEntry({ id: '_ws/abcd1234abcd1234/ws-new' })],
-    state: emptyState(), scope, userSegmentTokens: 0,
+    state: emptyState(), scope, totalBytes: 262144, reservedBytes: 0,
   }).text
   assert.equal(globalAfter, globalBefore, '新增工作区条目不该改变全局块的正文')
 })
@@ -657,10 +645,10 @@ test('自动段：新增一层的条目不改另一层的正文（拆域的意�
 test('自动段：确认过的不再按信心二次筛选；候选一条都不注入', () => {
   // 能进入注入集合的条目已经过记忆页 / 卡片确认，confidence 只参与排序 —— 再拿它筛一次
   // 就是「确认了却不注入」那类静默失效。
-  const weak = renderAutoLayer('global', { entries: [entryOf({ id: 'a', confidence: 0.5 })], state: emptyState(), scope: {}, userSegmentTokens: 0 })
+  const weak = renderAutoLayer('global', { entries: [entryOf({ id: 'a', confidence: 0.5 })], state: emptyState(), scope: {}, totalBytes: 262144, reservedBytes: 0 })
   assert.match(weak.text, /a/)
   // 候选没被确认，哪怕信心很高也不注入。
-  const pending = renderAutoLayer('global', { entries: [entryOf({ id: 'b', status: 'candidate', confidence: 0.95 })], state: emptyState(), scope: {}, userSegmentTokens: 0 })
+  const pending = renderAutoLayer('global', { entries: [entryOf({ id: 'b', status: 'candidate', confidence: 0.95 })], state: emptyState(), scope: {}, totalBytes: 262144, reservedBytes: 0 })
   assert.equal(pending.text, '')
 })
 
@@ -670,32 +658,30 @@ test('自动段：待裁决的、关掉的一律不注入', () => {
     ...emptyState(),
     entries: { x: { evidence: [], counters: { injected: 0, read: 0, helpful: 0, harmful: 0 }, transitions: [], needsReview: '与你的记忆冲突' } },
   }
-  assert.equal(renderAutoLayer('global', { entries: [base], state, scope: {}, userSegmentTokens: 0 }).text, '')
-  assert.equal(renderAutoLayer('global', { entries: [{ ...base, enabled: false }], state: emptyState(), scope: {}, userSegmentTokens: 0 }).text, '')
+  assert.equal(renderAutoLayer('global', { entries: [base], state, scope: {}, totalBytes: 262144, reservedBytes: 0 }).text, '')
+  assert.equal(renderAutoLayer('global', { entries: [{ ...base, enabled: false }], state: emptyState(), scope: {}, totalBytes: 262144, reservedBytes: 0 }).text, '')
 })
 
 test('自动段：core / pinned 常驻（低信心也照常注入）', () => {
   const core = entryOf({ id: 'core-x', status: 'core', confidence: 0.5 })
-  const r = renderAutoLayer('global', { entries: [core], state: emptyState(), scope: {}, userSegmentTokens: 0 })
+  const r = renderAutoLayer('global', { entries: [core], state: emptyState(), scope: {}, totalBytes: 262144, reservedBytes: 0 })
   assert.match(r.text, /core-x/)
 })
 
-test('自动段：预算按上下文窗口算，且有硬上下限；按层缩到自己的 min', () => {
-  assert.equal(autoBudgetOf(undefined), 1600)
-  assert.equal(autoBudgetOf(32 * 1024), 800) // 32K × 1.5% = 491 → 夹到下限
-  assert.equal(autoBudgetOf(1_000_000), 2400) // 夹到上限
-  assert.equal(competitorBudgetOfLayer(1600, 0, 'global').reduced, 'none')
-  assert.equal(competitorBudgetOfLayer(1600, 0, 'global').budget, 500) // 300 + 200 开销
-  assert.equal(competitorBudgetOfLayer(1600, 0, 'workspace').budget, 850) // 650 + 200
-  assert.equal(competitorBudgetOfLayer(1600, 10_000, 'global').reduced, 'min')
-  assert.equal(competitorBudgetOfLayer(1600, 10_000, 'global').budget, 300) // 100 + 200
-  assert.equal(competitorBudgetOfLayer(1600, 10_000, 'workspace').budget, 400) // 200 + 200
-  assert.equal(competitorBudgetOfLayer(1600, 30_000, 'global').budget, 0)
+test('自动段：余量 = 总盘 - 已占字节，不为负数', () => {
+  assert.equal(remainingBytesOf(262144, 0), 262144)
+  assert.equal(remainingBytesOf(262144, 4096), 258048)
+  // 手写记忆已经吃满（甚至更多）→ 自动段一点空间都没有，早退分支会明说。
+  assert.equal(remainingBytesOf(262144, 262144), 0)
+  assert.equal(remainingBytesOf(262144, 300000), 0)
+  // 非法输入按 0 算，不能让 NaN 流进比较（NaN 参与比较永远是 false，条目会全部进来）。
+  assert.equal(remainingBytesOf(Number.NaN, 100), 0)
+  assert.equal(remainingBytesOf(262144, Number.NaN), 262144)
 })
 
 test('自动段：条数多时截断并明说（不静默丢）', () => {
   const entries = Array.from({ length: 60 }, (_, i) => entryOf({ id: 'g/' + i, oneLine: '条目 ' + i, estTokens: 7 }))
-  const r = renderAutoLayer('global', { entries, state: emptyState(), scope: {}, userSegmentTokens: 0, contextWindow: 64000 })
+  const r = renderAutoLayer('global', { entries, state: emptyState(), scope: {}, totalBytes: 262144, reservedBytes: 0 })
   assert.ok(r.count > 0)
   assert.ok(r.dropped > 0)
   assert.match(r.text, /not shown/)
@@ -708,7 +694,7 @@ test('自动段：预算归零 / 一条都放不下时明说未显示，并标 t
   // 合并后的记忆块会一边省略全部笔记、一边声称"这就是全部"。
   const zero = renderAutoLayer('global', {
     entries: [entryOf({ id: 'g/a', oneLine: '一条笔记', estTokens: 100 })],
-    state: emptyState(), scope: {}, userSegmentTokens: 30_000,
+    state: emptyState(), scope: {}, totalBytes: 262144, reservedBytes: 262144,
   })
   assert.equal(zero.truncated, true)
   assert.match(zero.text, /Learned notes are not shown here/)
@@ -716,7 +702,7 @@ test('自动段：预算归零 / 一条都放不下时明说未显示，并标 t
   // min 档只剩 100 token 可用，一条渲染行就超过它 → picked 为空也要明说。
   const min = renderAutoLayer('global', {
     entries: [entryOf({ id: 'g/b', oneLine: 'x'.repeat(400), estTokens: 100 })],
-    state: emptyState(), scope: {}, userSegmentTokens: 10_000,
+    state: emptyState(), scope: {}, totalBytes: 262144, reservedBytes: 262000,
   })
   assert.equal(min.truncated, true)
   assert.match(min.text, /not shown/)
@@ -730,19 +716,19 @@ test('自动段：预算按实际渲染行计（带 key 的加粗前缀不能白
     oneLine: 'x',
     estTokens: 1,
   }))
-  const r = renderAutoLayer('global', { entries, state: emptyState(), scope: {}, userSegmentTokens: 0, contextWindow: 64000 })
+  const r = renderAutoLayer('global', { entries, state: emptyState(), scope: {}, totalBytes: 262144, reservedBytes: 0 })
   assert.ok(r.count > 0)
   assert.ok(r.tokens <= r.budget, `${r.tokens} > ${r.budget}`)
 })
 
 test('自动段：总条数不超过硬顶', () => {
   const entries = Array.from({ length: 200 }, (_, i) => entryOf({ id: 'g/' + i, oneLine: 'x' + i, estTokens: 3, pinned: true }))
-  const r = renderAutoLayer('global', { entries, state: emptyState(), scope: {}, userSegmentTokens: 0, contextWindow: 400000 })
+  const r = renderAutoLayer('global', { entries, state: emptyState(), scope: {}, totalBytes: 262144, reservedBytes: 0 })
   assert.ok(r.count <= 40, String(r.count))
 })
 
 test('自动段：没有候选时不发空块（不占上下文）', () => {
-  const r = renderAutoLayer('global', { entries: [], state: emptyState(), scope: {}, userSegmentTokens: 0 })
+  const r = renderAutoLayer('global', { entries: [], state: emptyState(), scope: {}, totalBytes: 262144, reservedBytes: 0 })
   assert.equal(r.text, '')
   assert.deepEqual(r.pickedIds, [])
 })
@@ -752,7 +738,7 @@ test('自动段：pickedIds 只含真正进入快照的条目（注入计数靠�
     entryOf({ id: 'a', oneLine: 'a' }),
     entryOf({ id: 'b', status: 'candidate', oneLine: 'b' }),
   ]
-  const r = renderAutoLayer('global', { entries, state: emptyState(), scope: {}, userSegmentTokens: 0 })
+  const r = renderAutoLayer('global', { entries, state: emptyState(), scope: {}, totalBytes: 262144, reservedBytes: 0 })
   assert.deepEqual(r.pickedIds, ['a'])
 })
 

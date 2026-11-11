@@ -84,6 +84,11 @@ export interface Rule {
   /** 同名 bundle 存在时被遮蔽的 flat（UI 标红，不参与投影）。 */
   shadowed?: boolean
   /**
+   * 列表行的正文摘要（压平空白后按显示宽度截断）。**只在 `rules-list` 的返回里补上**，
+   * 不落盘、不参与注入 —— 注入用的是完整正文。
+   */
+  excerpt?: string
+  /**
    * bundle 记忆的附件摘要。**只在 `rules-list` 的返回里**补上（发现阶段不扫附件目录）；
    * flat 记忆没有这个字段。目录读不到时也不会有（界面据此不显示附件标签，而不是谎报 0）。
    */
@@ -283,6 +288,13 @@ export interface MemoriesService {
     autoNotesRoot: string
     /** 索引所在目录（hub 根）。 */
     stateDir: string
+    /**
+     * 注入总盘（字节）：手写记忆与自主笔记共用。
+     *
+     * 自动段要知道"还剩多少"才能决定装几条 —— 这个数必须与手写段用的是同一个，
+     * 各存一份就会两块各自以为还有空间，加起来超出上限。
+     */
+    maxBytes: number
     /** 写后失效快照缓存。 */
     invalidateSnapshot(): void
     /**

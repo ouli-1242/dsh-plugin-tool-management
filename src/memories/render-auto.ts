@@ -15,24 +15,17 @@
 //    不体现为文本。
 
 import {
-  AUTO_BUDGET_DEFAULT, AUTO_BUDGET_MAX, AUTO_BUDGET_MIN, AUTO_BUDGET_RATIO,
-  AUTO_L0_MAX, AUTO_LAYER_BUDGET, AUTO_MAX_ENTRIES,
-  AUTO_MEMORY_NOTE, AUTO_MEMORY_NOTE_PARTIAL, AUTO_USER_SEGMENT_HARD_TOKENS, AUTO_USER_SEGMENT_SOFT_TOKENS,
+  AUTO_L0_MAX, AUTO_MAX_ENTRIES,
+  AUTO_MEMORY_NOTE, AUTO_MEMORY_NOTE_PARTIAL,
   LAYER_GLOBAL, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE, TRUNCATION_MARKER,
   type MemoryLayer,
 } from './constants.js'
 import { isInjectableStatus, type CatalogEntry } from './catalog.js'
+import { itemBlock } from './projection.js'
 import { scoreOf, type EntryCounters, type EvolutionState } from '../evolution/state.js'
-import { textWidthOf, truncateToWidth } from '../text-width.js'
 
 /** 自动记忆的两个注入层。 */
 export type AutoLayer = 'global' | 'workspace'
-
-/**
- * 固定开销：收尾句 + 可能的截断 / 降级行。从总盘里先扣掉，避免"装满了但发不出去"。
- * 比旧单块时代的 120 大：现在每个域各带一份收尾句，拆域没有共享这一句。
- */
-const OVERHEAD_TOKENS = 200
 
 export interface AutoRenderScope {
   workspaceHash?: string
@@ -44,13 +37,18 @@ export interface AutoRenderInput {
   entries: CatalogEntry[]
   state: EvolutionState
   scope: AutoRenderScope
-  /** 用户记忆段实际用掉的估算 token（竞争降级用）。 */
-  userSegmentTokens: number
-  /** 上下文窗口；拿不到就传 undefined。 */
-  contextWindow?: number
+  /** 共享注入总盘（字节）：手写记忆 + 自主笔记共用这一个数。 */
+  totalBytes: number
+  /**
+   * 已被更高优先级内容占掉的字节。
+   *
+   * 分配顺序（也是丢弃顺序的反向）：手动全局 → 场景记忆 → 全局自主 → 工作区自主。
+   * 所以全局层传"手写记忆段的字节"，工作区层再叠加"全局自主段实际用掉的字节"。
+   */
+  reservedBytes: number
   /**
    * 当前笔记风格的注入行（`noteStyleLineOf` 生成）。空 / 缺省 = 默认风格，不注入 ——
-   * 默认档由工具描述约束，额外一行只是常驻 token。
+   * 默认档由工具描述约束，额外一行只是常驻字节。
    */
   noteStyleLine?: string
 }
@@ -80,89 +78,42 @@ export interface AutoRenderResult {
 
 const zeroByLayer = (): Record<MemoryLayer, number> => ({ global: 0, workspace: 0, scene: 0, session: 0 })
 
-/** 总盘：`clamp(contextWindow × 1.5%, 800, 2400)`，拿不到窗口用 1600。 */
-export function autoBudgetOf(contextWindow: number | undefined): number {
-  if (typeof contextWindow !== 'number' || !Number.isFinite(contextWindow) || contextWindow <= 0) return AUTO_BUDGET_DEFAULT
-  const raw = Math.round(contextWindow * AUTO_BUDGET_RATIO)
-  return Math.min(AUTO_BUDGET_MAX, Math.max(AUTO_BUDGET_MIN, raw))
-}
-
-/** 用户记忆段落在哪一档：正常 / 缩到该层 min / 归零。 */
-export function budgetModeOf(userSegmentTokens: number): 'none' | 'min' | 'zero' {
-  if (userSegmentTokens > AUTO_USER_SEGMENT_HARD_TOKENS) return 'zero'
-  if (userSegmentTokens > AUTO_USER_SEGMENT_SOFT_TOKENS) return 'min'
-  return 'none'
-}
-
 /**
- * 单层预算：用户记忆太大时缩到该层 min；否则取该层 max，再与总盘取小。
+ * 本层还能用多少字节：总盘减去更高优先级内容已占的部分。
  *
- * 不改用户记忆的渲染（那是既有行为），只缩自动段；两层各自缩，不会互相踩。
+ * 不给自动段单独设上限 —— 总盘已经管住了"一共能吃多少"，再叠一层层配额只会让
+ * "明明还有空间却不注入"变成一种无法解释的行为。
  */
-export function competitorBudgetOfLayer(
-  total: number,
-  userSegmentTokens: number,
-  layer: AutoLayer,
-): { budget: number; reduced: 'none' | 'min' | 'zero' } {
-  const mode = budgetModeOf(userSegmentTokens)
-  if (mode === 'zero') return { budget: 0, reduced: 'zero' }
-  const cap = mode === 'min' ? AUTO_LAYER_BUDGET[layer].min : AUTO_LAYER_BUDGET[layer].max
-  return { budget: Math.min(total, cap + OVERHEAD_TOKENS), reduced: mode }
+export function remainingBytesOf(totalBytes: number, reservedBytes: number): number {
+  const total = Number.isFinite(totalBytes) ? totalBytes : 0
+  const used = Number.isFinite(reservedBytes) ? reservedBytes : 0
+  return Math.max(0, total - used)
 }
 
 /**
- * 注入行末尾边界的宽度上限（显示宽度）：160 单位 = 80 汉字 = 160 字母。
- *
- * 与 `AUTO_ONELINE_MAX`（160）同档：一行里名称、正文、边界三部分权重相当，边界不该比
- * 正文短一截。按显示宽度算而不是字符数 —— 汉字 2 单位、字母 1 单位，同一上限下英文
- * 自然拿到两倍字符数（≈ 2 句，约 54 tok；中文 ≈ 80 tok）。
- *
- * 边界是"什么时候不成立"，两句话够；整段条件塞进每一轮上下文既吃预算，也会把结论挤到
- * 看不见的地方。超限截断并标 `…`，要读全的条件走 `memory_get`。
- */
-export const INJECT_BOUNDARY_MAX_WIDTH = 160
-
-/**
- * 边界按上限截断：超限才动，截完补 `…`。
- *
- * 英文不能按码点硬切 —— 那样会切出半个单词（`…quick checks f`）。切点前
- * {@link BOUNDARY_WORD_BACKOFF} 宽度内找得到空白就回退到那个空白，再补 `…`；
- * 中文没有空白，回退自然不触发，仍按字切。
- */
-export const BOUNDARY_WORD_BACKOFF = 20
-
-function truncateBoundary(text: string): string {
-  if (textWidthOf(text) <= INJECT_BOUNDARY_MAX_WIDTH) return text
-  const cut = truncateToWidth(text, INJECT_BOUNDARY_MAX_WIDTH)
-  // 回退到词边界：只在切点附近找，找得越远丢掉的内容越多，不如直接标 `…`。
-  const head = cut.slice(0, cut.length - BOUNDARY_WORD_BACKOFF)
-  const tail = cut.slice(cut.length - BOUNDARY_WORD_BACKOFF)
-  const space = tail.search(/\s/)
-  const kept = space >= 0 ? head + tail.slice(0, space) : cut
-  return kept.replace(/[\s,;:，；：]+$/, '') + '…'
-}
-
-/**
- * 一行：`- **名称** — 正文 (boundary: 边界)`，与用户记忆段的 `- **名称** (描述) — 正文` 同形。
+ * 一条笔记的注入块：与手写记忆同构（`itemBlock`），正文**完整**进上下文。
  *
  * 不带类型标签，也**不带 id**：模型不需要知道内部分类；而 id（`_ws/<hash16>/<slug>`）
  * 是磁盘目录，对模型和用户都没有意义 —— 真要按引用定位，`memory_get` 已经支持
- * id / slot / 名称 / 注入行首句四种写法，注入行里有后三种。
+ * id / slot / 名称 / 注入行首句四种写法。
  *
- * **playbook 只放标题**（P4）：它带着十几个步骤，整段塞进每轮上下文会吃掉自动段的大半
- * 预算，而且模型在没决定执行之前根本用不上。这里只告诉它"有这么一份已验证流程"，
- * 真要执行时再 `memory_get` 取全文。预算按实际渲染行记，不会因为标题短就多塞几条进来。
+ * 边界不再另附：正文落盘时就把 `边界：…` 拼在了末尾（`renderBody`），再附一次会让同一句话
+ * 在上下文里出现两遍。
+ *
+ * **playbook 只放标题**：它带着十几个步骤，整段塞进每轮上下文会吃掉大半预算，而且模型在
+ * 没决定执行之前根本用不上。这里只告诉它"有这么一份已验证流程"，真要执行时再 `memory_get`。
  */
 export function lineOf(entry: CatalogEntry): string {
   const fallback = entry.id.slice(entry.id.lastIndexOf('/') + 1)
   const name = (entry.title ?? '').trim() || entry.key || ''
-  const boundary = String(entry.boundary ?? '').trim()
-  const boundaryPart = boundary === '' ? '' : ` (boundary: ${truncateBoundary(boundary)})`
+  const body = entry.body || entry.oneLine
   if (entry.status === 'playbook') {
     const title = name || fallback
-    return `- **${title}** — playbook; read the full note for steps${boundaryPart}`
+    return `- **${title}** — playbook; read the full note for steps\n`
   }
-  return (name === '' ? `- ${entry.oneLine}` : `- **${name}** — ${entry.oneLine}`) + boundaryPart
+  // 没有名称的旧条目（`auto_title` 与 `auto_key` 都缺）：只输出正文，不留一对空加粗。
+  if (name === '') return `- ${body.trim()}\n`
+  return itemBlock(name, body).text
 }
 
 const countersOf = (state: EvolutionState, id: string): EntryCounters =>
@@ -190,16 +141,17 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
   // 风格行只进 `text`（注入正文），不进 `body`（条目集合）：合并块用 body 拼用户记忆，
   // 风格行由调用方单独拼在收尾句之后。它也算进条目预算，否则会在满配时把正文顶出上限。
   const styleLine = String(input.noteStyleLine ?? '').trim()
-  const styleCost = styleLine === '' ? 0 : Math.ceil(Buffer.byteLength(styleLine, 'utf8') / 3)
+  const styleCost = Buffer.byteLength(styleLine, 'utf8')
   const tailOf = (note: string): string => note + (styleLine === '' ? '' : '\n' + styleLine)
-  const total = autoBudgetOf(input.contextWindow)
-  const { budget, reduced } = competitorBudgetOfLayer(total, input.userSegmentTokens, layer)
-  if (budget <= 0) {
+  const budget = remainingBytesOf(input.totalBytes, input.reservedBytes)
+  // 收尾句也要占地方：装满了却发不出去，等于这一层白渲染。
+  const noteCost = Buffer.byteLength(AUTO_MEMORY_NOTE, 'utf8')
+  if (budget <= noteCost + styleCost) {
     const dropped = input.entries.length
     if (dropped === 0) return { ...empty, budget: 0 }
-    // 预算归零（手写记忆太大）时也要留一句"笔记没显示"：合并块只在 `truncated` 为真时
-    // 去掉「完整集合」，没有这一句，模型会以为自动笔记本来就不存在。这里不报条数 ——
-    // 这个分支还没按层过滤，`input.entries.length` 会把别的层 / 已停用的条目也算进去。
+    // 预算耗尽时也要留一句"笔记没显示"：合并块只在 `truncated` 为真时去掉「完整集合」，
+    // 没有这一句，模型会以为自动笔记本来就不存在。这里不报条数 —— 这个分支还没按层过滤，
+    // `input.entries.length` 会把别的层 / 已停用的条目也算进去。
     const body = `${TRUNCATION_MARKER} Learned notes are not shown here because the hand-written memories are large; list them with memory_get (kind=note).`
     // 「Learned notes」在这里指**这一类**（agent 学的笔记），不是板块名 —— 板块名随层不同，
     // 这句要在两层的渲染里都读得通。
@@ -207,7 +159,7 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
     return { ...empty, text, body, truncated: true, tokens: Math.ceil(Buffer.byteLength(text, 'utf8') / 3), budget: 0, dropped }
   }
 
-  const usable = Math.max(0, budget - OVERHEAD_TOKENS - styleCost)
+  const usable = budget - noteCost - styleCost
   const scope = input.scope
 
   // 候选：状态可注入 + 层匹配 + 未挂待裁决。L0（core / playbook / pinned）只影响预算次序。
@@ -241,9 +193,9 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
   // 去重指纹跟着变，整段重发）。
   candidates.sort((a, b) => b.score - a.score || a.entry.id.localeCompare(b.entry.id))
 
-  // 预算按**实际渲染行**记，不按 oneLine 的 estTokens：行里还有 `- `、加粗的 key 与
-  // procedure 的 id，旧口径会少算，条目一多就超出该层预算。
-  const costOf = (entry: CatalogEntry): number => Math.ceil(Buffer.byteLength(lineOf(entry), 'utf8') / 3)
+  // 预算按**实际渲染块**的字节记，不按 `estTokens`：块里还有 `- `、加粗的名称与围栏，
+  // 估算口径会少算，条目一多就顶穿总盘。
+  const costOf = (entry: CatalogEntry): number => Buffer.byteLength(lineOf(entry), 'utf8')
   const picked: CatalogEntry[] = []
   let l0Count = 0
   let spent = 0
@@ -270,15 +222,15 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
   picked.sort((a, b) => a.oneLine.localeCompare(b.oneLine) || a.id.localeCompare(b.id))
 
   const dropped = candidates.length - picked.length
-  const entryLines = picked.map(lineOf)
-  const lines = [...entryLines]
-  if (dropped > 0) lines.push('', `${TRUNCATION_MARKER} ${dropped} more learned note(s) not shown; list them with memory_get (kind=note).`)
-  if (reduced === 'min') lines.push('', '(This conversation\'s hand-written memories are large, so learned notes are shown at their minimum budget.)')
-  // 收尾句（与用户记忆的版式一致）：条目 → 截断/降级提示 → 空行 → 收尾句。
+  // 每条块的结尾已经带换行（`itemBlock` 如此），拼起来不再补 `\n`。
+  const entryBlocks = picked.map(lineOf)
+  const lines = [...entryBlocks]
+  if (dropped > 0) lines.push('', `${TRUNCATION_MARKER} ${dropped} more learned note(s) not shown; list them with memory_get (kind=note).\n`)
+  // 收尾句（与用户记忆的版式一致）：条目 → 截断提示 → 空行 → 收尾句。
   // 截断时去掉「完整集合」声明，否则段尾那句与上面的省略提示自相矛盾。
   const note = dropped > 0 ? AUTO_MEMORY_NOTE_PARTIAL : AUTO_MEMORY_NOTE
-  const body = lines.join('\n')
-  const text = body + '\n\n' + tailOf(note) + '\n'
+  const body = lines.join('')
+  const text = body + '\n' + tailOf(note) + '\n'
 
   const byLayer = zeroByLayer()
   byLayer[layer] = picked.length
@@ -292,13 +244,7 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
     dropped,
     byLayer,
     pickedIds: picked.map((e) => e.id),
-    picked: picked.map((e, i) => ({ id: e.id, line: entryLines[i] })),
+    picked: picked.map((e, i) => ({ id: e.id, line: entryBlocks[i] })),
   }
 }
 
-/**
- * 估算一段文本的 token（与自动段同一口径：3 bytes/token）。
- * 给"用户记忆段竞争"用 —— 那边只有已渲染的字符串，没有逐条的 token 记账。
- */
-export const estimateTextTokens = (text: string): number =>
-  Math.ceil(Buffer.byteLength(text ?? '', 'utf8') / 3)

@@ -17,6 +17,7 @@ import { parseSkillDoc } from '../skills/core.js'
 import { AUTO_ONELINE_MAX, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE, layerOfGroup, type MemoryLayer } from './constants.js'
 import { deriveFromDoc, discover, type ParsedSkillDoc } from './discovery.js'
 import { sceneOf } from './projection.js'
+import { excerptOf } from '../text-width.js'
 import type { RulesIndex } from './service.js'
 
 /** hub 内相对路径。 */
@@ -57,7 +58,14 @@ export interface CatalogEntry {
   key: string
   /** candidate / active / core / superseded / archived。 */
   status: string
-  /** 注入用的那一行（正文压成一行，超长截断）。 */
+  /**
+   * 注入用的正文（完整，不截断）。
+   *
+   * 与 `oneLine` 分工：这条进上下文，`oneLine` 只给列表扫读与 `memory_get` 清单。
+   * 早先注入的是 `oneLine`，等于每条笔记只进前 160 字 —— 正文后半截被静默丢掉。
+   */
+  body: string
+  /** 列表与清单用的单行摘要（压平后按显示宽度截断）。 */
   oneLine: string
   /** playbook 的标题：升为 playbook 后注入**只放这一行**，不展开步骤。 */
   title?: string
@@ -88,11 +96,9 @@ export interface CatalogFile {
 /** UTF-8 字节 → 估算 token。按 3 bytes/token（中文）算：对英文是高估，高估是安全的。 */
 export const estimateTokens = (bytes: number): number => Math.max(1, Math.ceil(bytes / 3))
 
-/** 正文压成一行并截断；空正文返回空串。 */
+/** 正文压成一行并按显示宽度截断；空正文返回空串。只用于列表扫读，注入用完整正文。 */
 export function oneLineOf(text: string, max = AUTO_ONELINE_MAX): string {
-  const flat = String(text ?? '').replaceAll(/\s+/g, ' ').trim()
-  if (flat.length <= max) return flat
-  return flat.slice(0, Math.max(0, max - 1)) + '…'
+  return excerptOf(text, max)
 }
 
 /** 一条记忆是否该进 catalog：只看来源，不看目录（目录只决定层）。 */
@@ -140,10 +146,10 @@ export async function buildCatalog(memoriesRoot: string, index: RulesIndex): Pro
     if (!isAutoOrigin(derived.origin, layer)) continue
     const idx = index.rules[entry.id]
     const { workspace, session } = ownerOf(entry.group)
-    // 注入行直接取正文：不再读 `description`（那是正文的有损副本，改了正文就得重算，
-    // 而它永远不如正文本身准）。
-    const oneLine = oneLineOf(doc.body)
-    const bytes = Buffer.byteLength(oneLine, 'utf8')
+    // 注入用完整正文；`oneLine` 只是列表摘要。字节按正文算 —— 进上下文的是它。
+    const body = String(doc.body ?? '').trim()
+    const oneLine = oneLineOf(body)
+    const bytes = Buffer.byteLength(body, 'utf8')
     // `auto_title` 是 P4 才有的字段；旧条目没有时留空，注入侧会退回 key / 文件名。
     const autoTitle = typeof doc.map.auto_title === 'string' ? String(doc.map.auto_title).trim() : ''
     entries[entry.id] = {
@@ -158,6 +164,7 @@ export async function buildCatalog(memoriesRoot: string, index: RulesIndex): Pro
       ...(derived.autoBoundary !== undefined ? { boundary: derived.autoBoundary } : {}),
       // 自动条目缺省 candidate：没有证据链的条目不该被当成 active 注入。
       status: derived.autoStatus ?? 'candidate',
+      body,
       oneLine,
       bytes,
       estTokens: estimateTokens(bytes),
@@ -190,6 +197,9 @@ export function normalizeCatalog(raw: any): CatalogFile {
       kind: typeof v.kind === 'string' ? v.kind : '',
       key: typeof v.key === 'string' ? v.key : '',
       status: typeof v.status === 'string' ? v.status : 'candidate',
+      // 旧 catalog 没有 `body`（那时注入的是 `oneLine`）：退回它，别让条目在升级后
+      // 变成"有摘要、没正文"而注入失败。下次重建会写回完整正文。
+      body: typeof v.body === 'string' ? v.body : v.oneLine,
       oneLine: v.oneLine,
       bytes: typeof v.bytes === 'number' ? v.bytes : estimateTokens(0),
       estTokens: typeof v.estTokens === 'number' ? v.estTokens : estimateTokens(0),
@@ -237,10 +247,11 @@ export function visibleEntries(
 export function catalogEntryOf(
   id: string,
   layer: MemoryLayer,
-  fields: Partial<CatalogEntry> & { oneLine: string },
+  fields: Partial<CatalogEntry> & { body: string },
 ): CatalogEntry {
-  const oneLine = oneLineOf(fields.oneLine)
-  const bytes = Buffer.byteLength(oneLine, 'utf8')
+  const body = String(fields.body ?? '').trim()
+  const oneLine = fields.oneLine !== undefined ? oneLineOf(fields.oneLine) : oneLineOf(body)
+  const bytes = Buffer.byteLength(body, 'utf8')
   const { workspace, session } = ownerOf(id.slice(0, id.lastIndexOf('/')))
   return {
     id,
@@ -253,6 +264,7 @@ export function catalogEntryOf(
     ...(fields.title !== undefined && fields.title !== '' ? { title: fields.title } : {}),
     ...(fields.boundary !== undefined && fields.boundary !== '' ? { boundary: fields.boundary } : {}),
     status: fields.status ?? 'candidate',
+    body,
     oneLine,
     bytes,
     estTokens: estimateTokens(bytes),

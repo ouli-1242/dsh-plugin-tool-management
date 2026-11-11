@@ -1221,6 +1221,9 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
       /** 自主记忆自己的根目录（装配 learner / dreamer 时传它，别再传 memoriesRoot）。 */
       autoNotesRoot,
       stateDir,
+      // 自动段与手写段共用同一个盘：两块都进同一次对话的上下文，各算一份就没人说得清
+      // "一共能吃多少"。
+      maxBytes,
       invalidateSnapshot,
       rebuildCatalog,
     },

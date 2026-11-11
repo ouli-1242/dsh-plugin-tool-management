@@ -74,7 +74,7 @@ import { buildScopeQuestion, scopeChoiceOf, scopeFailureOf, type ScopeAskRequest
 import { createLearner } from './evolution/write.js'
 import type { IncrementalSnapshot } from './context-inject-contract.js'
 import { COMBINED_MEMORY_NOTE, COMBINED_MEMORY_NOTE_PARTIAL, isReservedGroup, layerOfGroup } from './memories/constants.js'
-import { renderAutoLayer, budgetModeOf, estimateTextTokens, type AutoLayer } from './memories/render-auto.js'
+import { renderAutoLayer, type AutoLayer } from './memories/render-auto.js'
 import { appendToSceneGroup } from './memories/projection.js'
 import { workspaceMemoryKeyOf } from './scope/workspace-key.js'
 import { buildEvolutionOps } from './ops/evolution.js'
@@ -2502,22 +2502,22 @@ export default {
         const enabledScenes = new Set<string>(scene ? [scene] : [])
         const view = evolutionRuntime.view()
 
-        // 用户记忆段的预算档位也进快照键：手写记忆跨过 8K / 24K 阈值时，
-        // 自动段该按新预算重算，而不是等下一次无关的 revision 变化。
-        let userSegmentTokens = 0
-        try { userSegmentTokens = estimateTextTokens(memoryDomainText(agent)) } catch { userSegmentTokens = 0 }
-        const budgetMode = budgetModeOf(userSegmentTokens)
+        // 手写记忆段占掉的字节：自动段是共享总盘里**排在它后面**的那一块，必须知道还剩多少。
+        // 读不动按 0 算 —— 自动段只是附加信息，不能因为手写段读失败就整段不注入。
+        let userSegmentBytes = 0
+        try { userSegmentBytes = Buffer.byteLength(memoryDomainText(agent), 'utf8') } catch { userSegmentBytes = 0 }
         // 非默认风格要告诉模型。两层都有内容时只由全局块携带，避免同一句注入两次；
         // 全局块为空（没有用户记忆、也没有全局笔记）时才由工作区块兜底。
         const styleLine = (
           layer === 'global'
           || !cfg.learnGlobal
-          || (userSegmentTokens === 0 && !Object.values(view.catalog.entries).some((e) => e.layer === 'global'))
+          || (userSegmentBytes === 0 && !Object.values(view.catalog.entries).some((e) => e.layer === 'global'))
         ) ? noteStyleLineOf(cfg.noteStyle, cfg.customNoteStyles) : ''
 
         // 快照键含 revision（用户动作后重建本会话的段）；增量模式键**不含** —— 学习 / 确认 /
         // 删除本来就会改变条目集合，差集能表达成 `+ / -`；把 revision 并进模式键只会让每次
-        // 学习都判"环境变了"而回全量，增量等于没做。预算档 / 场景 / 工作区 / 开关仍在模式键里。
+        // 学习都判"环境变了"而回全量，增量等于没做。总盘 / 已占字节 / 场景 / 工作区 / 开关
+        // 仍在模式键里：手写段变大变小都要让自动段按新余量重算。
         const modeParts = {
           layer,
           ...(sid !== undefined ? { sessionId: sid } : {}),
@@ -2525,7 +2525,8 @@ export default {
           scenes: [...enabledScenes],
           enabled: cfg.enabled,
           inject: cfg.inject,
-          budgetMode,
+          totalBytes: memoriesService.autoAccess.maxBytes,
+          reservedBytes: userSegmentBytes,
           // 风格变了要重渲染：工作区块的正文里带着风格行，不能等下一次无关的 revision。
           noteStyle: cfg.noteStyle,
           customNoteStyles: cfg.customNoteStyles.map((s) => `${s.id}:${s.name}:${s.guide}`).join('\u0000'),
@@ -2539,6 +2540,9 @@ export default {
           return { text: prev.text, body: prev.body ?? '', truncated: prev.truncated === true, picked: prev.picked ?? [], mode, styleLine }
         }
 
+        // 工作区层排在全局层之后：全局自主段已经吃掉的字节也要先扣掉，否则两块各自
+        // 以为还有整个总盘，加起来就超了。
+        const globalAutoBytes = layer === 'global' ? 0 : Buffer.byteLength(autoDomainText('global', agent), 'utf8')
         const result = renderAutoLayer(layer, {
           entries: Object.values(view.catalog.entries),
           state: view.state,
@@ -2547,7 +2551,8 @@ export default {
             ...(sid !== undefined ? { sessionId: sid } : {}),
             enabledScenes,
           },
-          userSegmentTokens,
+          totalBytes: memoriesService.autoAccess.maxBytes,
+          reservedBytes: userSegmentBytes + globalAutoBytes,
           noteStyleLine: styleLine,
         })
         const snap: AutoSnapshot = {

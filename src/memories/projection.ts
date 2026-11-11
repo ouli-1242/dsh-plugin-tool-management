@@ -362,14 +362,26 @@ export const bodyBlock = (text: string): string => {
  * 返回值带 `inline`：调用方据此决定下一条记忆前要不要空行（单行条目连续排列，其余空行分隔）。
  */
 export function memoryBlock(file: SceneMemoryFile): { text: string; inline: boolean } {
+  const attach = attachmentLine(file)
+  return itemBlock(file.name, file.body, attach)
+}
+
+/**
+ * 一条记忆的注入块（手写记忆与自主笔记共用这一份形态）。
+ *
+ * @param name 条目标题（加粗）；空串时只输出正文。
+ * @param body 完整正文（不截断）。
+ * @param attach 附件行（缩进子项）；空串 = 没有附件。
+ * @returns `inline` 供调用方决定下一条之前要不要空行。
+ */
+export function itemBlock(name: string, body: string, attach = ''): { text: string; inline: boolean } {
   // 加粗的只有名称：`- **名称** — 正文`，与 MCP 段 `- **server**（N 个工具） — …` 同形。
-  const title = `**${file.name}**`
-  const text = String(file.body ?? '').trim()
+  const title = `**${name}**`
+  const text = String(body ?? '').trim()
   const inline = text === '' || (!text.includes('\n') && text.length <= INLINE_BODY_MAX)
   const head = text === ''
     ? `- ${title}`
     : (inline ? `- ${title} — ${text}` : `- ${title}\n\n${bodyBlock(text)}`)
-  const attach = attachmentLine(file)
   if (attach === '') return { text: `${head}\n`, inline }
   // 附件行恒为缩进子项：只用 `- ` 会被解析成与记忆**同级**的列表项（`- A` / `- 附件目录：A的` /
   // `- B` … 四条平级，归属读不出来）。单行条目紧跟其后保持列表连续；多行条目前面空一行，

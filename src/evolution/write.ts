@@ -736,15 +736,16 @@ export function createLearner(deps: LearnDeps) {
       catalog = normalizeCatalog(null)
     }
     const prev = catalog.entries[id]
-    // 合并路径保留原来的摘要与标题；目标还没有标题时，用本次请求补一个。
-    // 摘要直接取正文：不再走 `describeOf`（那是正文的有损副本，且已不再写盘）。
-    const oneLine = prev?.oneLine ?? oneLineOf(pass.text)
+    // 合并路径保留原来的正文与标题；新建时用本次请求的正文（含边界行，与落盘同源）。
+    // `oneLine` 只是列表摘要，注入用的是 `body`。
+    const body = prev?.body ?? renderBody(pass.text, boundaryOverride ?? req.boundary)
     const title = prev?.title || titleOf(req.title)
     // 边界：编辑路径显式给（正文里的边界行变了）；新建取本次请求；合并时目标文件里的
     // `auto_boundary` 没被动过，保留旧值。
     const boundary = boundaryOverride ?? prev?.boundary ?? String(req.boundary ?? '').trim().slice(0, MAX_BOUNDARY)
     catalog.entries[id] = catalogEntryOf(id, pass.layer, {
-      oneLine,
+      body,
+      oneLine: prev?.oneLine ?? oneLineOf(pass.text),
       ...(title !== '' ? { title } : {}),
       ...(boundary !== '' ? { boundary } : {}),
       status: statusOverride ?? pass.status,
@@ -769,7 +770,7 @@ export function createLearner(deps: LearnDeps) {
    */
   async function patchCatalogEntry(id: string, patch: Partial<{
     status: string; enabled: boolean; confidence: number; title: string; boundary: string
-    oneLine: string; bytes: number; estTokens: number; hash: string; mtime: number; size: number
+    body: string; oneLine: string; bytes: number; estTokens: number; hash: string; mtime: number; size: number
   }>): Promise<void> {
     try {
       const abs = catalogPathOf(deps.stateDir)
@@ -1424,7 +1425,9 @@ export function createLearner(deps: LearnDeps) {
       if (current === 'superseded') {
         return { ok: false, code: 'superseded', error: `refused: "${id}" was replaced by a newer memory; editing it would have no effect.` }
       }
-      const oneLine = oneLineOf(body)
+      // 注入用完整正文；`oneLine` 只是列表摘要，跟着正文一起重算。
+      const nextBody = String(body ?? '').trim()
+      const oneLine = oneLineOf(nextBody)
       // `undefined` = 这次不动名称；空串 = 用户清空了名称（删掉字段，列表按首句兜底）。
       const nextTitle = title === undefined ? undefined : titleOf(title)
       // 边界行（`边界：…` / `Boundary: …`）是正文的一部分，注入行另从 `auto_boundary` 读。
@@ -1449,8 +1452,9 @@ export function createLearner(deps: LearnDeps) {
       })
       if (!bumped.ok) return { ok: false, code: 'state-write-failed', error: bumped.error }
       await writeFileAtomically(docPath, next)
-      const bytes = Buffer.byteLength(oneLine, 'utf8')
+      const bytes = Buffer.byteLength(nextBody, 'utf8')
       await patchCatalogEntry(id, {
+        body: nextBody,
         oneLine,
         bytes,
         estTokens: estimateTokens(bytes),
