@@ -1044,6 +1044,21 @@
             }).catch(function (e) { setEvoBusy(false); setModal(null); setResult({ ok: false, text: errMsg(e) }) })
           }
 
+          /**
+           * 编辑弹窗标题：按层区分。
+           *
+           * 列表里全局与各工作区的条目同屏，只写「编辑自主记忆」时用户看不出改的是哪一层 ——
+           * 而层正是这条记忆的作用范围（全局每条对话都生效）。工作区名取列表回包里的
+           * `workspaceLabel`，拿不到时退成 hash 前 8 位（与卡内分节同一套兜底）。
+           */
+          function evolutionEditorTitle(e) {
+            if (e && e.layer === 'workspace') {
+              var name = String(e.workspaceLabel || '').trim() || shortWorkspaceHash(String(e.workspace || ''))
+              return t('evo.edit.title.workspace', { name: name })
+            }
+            return t('evo.edit.title.global')
+          }
+
           /** 打开编辑弹窗：先读正文（列表回包里不带正文，省流量）。 */
           function openEvolutionEditor(e) {
             setResult(null)
@@ -2083,8 +2098,7 @@
                   disabled: evoReview.busy || evoReview.loading || evoReview.error !== null,
                   onClick: approveEvolutionInReview,
                 }, evoReview.busy ? t('evo.review.approving') : t('evo.approve')))) : null,
-            modal && modal.type === 'evo-edit' ? React.createElement(Modal, { key: 'evoedit', title: t('evo.edit.title'), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
-              React.createElement('p', { className: 'dsm-help' }, t('evo.edit.hint')),
+            modal && modal.type === 'evo-edit' ? React.createElement(Modal, { key: 'evoedit', title: evolutionEditorTitle(modal.entry), closeLabel: t('btn.close'), onClose: function () { setModal(null) } },
               React.createElement('div', { className: 'dsm-form' },
                 React.createElement('label', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('memory.field.name')),
