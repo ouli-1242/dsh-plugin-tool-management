@@ -71,11 +71,17 @@ export function createRunProvider(deps: RunProviderDeps): Record<string, any> {
   } as const
   type ProviderKind = keyof typeof PROVIDER_PACKAGES
   const providerMounts: Partial<Record<ProviderKind, { ok: true } | { ok: false; error: string }>> = {}
+  /**
+   * provider 是否已在宿主运行时里注册。
+   *
+   * 按名字查（`getProvider`）：两代宿主都有这个只读入口，而「枚举全部名字」的那份接口只在一代
+   * 上有 —— 拿它当判据会让另一代永远判成「没挂上」，于是重复挂载同名 provider 直接撞官方报错。
+   */
   function hasProvider(runtime: any, kind: ProviderKind): boolean {
-    if (typeof runtime.list !== 'function') return false
+    const getProvider = runtime?.getProvider
+    if (typeof getProvider !== 'function') return false
     try {
-      const names = runtime.list()
-      return Array.isArray(names) && names.indexOf(kind) >= 0
+      return getProvider.call(runtime, kind) !== undefined
     } catch { return false }
   }
   async function ensureProvider(kind: ProviderKind): Promise<any> {
@@ -87,8 +93,9 @@ export function createRunProvider(deps: RunProviderDeps): Record<string, any> {
       )
     }
     if (hasProvider(runtime, kind)) return runtime
-    // 宿主没有 list() 就探测不了：不重复挂载（避免同名 provider 二次注册），交给 start 报官方错误兜底。
-    if (typeof runtime.list !== 'function') return runtime
+    // 宿主既没有 getProvider() 也没有 list()：探测不了注册状态。不重复挂载（避免同名 provider
+    // 二次注册），交给 start 报官方错误兜底。
+    if (typeof runtime.getProvider !== 'function' && typeof runtime.list !== 'function') return runtime
     if (!providerMounts[kind]) {
       const { pkg, label } = PROVIDER_PACKAGES[kind]
       try {
@@ -106,7 +113,7 @@ export function createRunProvider(deps: RunProviderDeps): Record<string, any> {
     }
     const mount = providerMounts[kind]
     if (!mount || !mount.ok) throw new Error(mount ? mount.error : 'provider mount failed (unknown reason)')
-    if (!hasProvider(runtime, kind)) throw new Error(`the ${kind} provider still does not appear in ctx.subagents.list() after mounting (host version mismatch?)`)
+    if (!hasProvider(runtime, kind)) throw new Error(`the ${kind} provider still does not appear in ctx.subagents.getProvider("${kind}") after mounting (host version mismatch?)`)
     return runtime
   }
 
@@ -323,18 +330,23 @@ export function createRunProvider(deps: RunProviderDeps): Record<string, any> {
     }
 
     const startSignal = signal ?? new AbortController().signal
+    // 激活请求在两代宿主上是两种形状：一代把任务字段装在 `request` 里，一代把它们平铺在顶层。
+    // 两份一起发 —— 官方各自只读自己那份，另一份被忽略，所以同一份载荷在两代上都成立。
+    // 只发一种形状会在另一代上静默丢字段（`parent` / `prompt` 读不到 → 启动即失败）。
+    const request = {
+      parent: parentAgent,
+      prompt: [{ type: 'text', text: kind === 'fork' ? renderPersonaPrompt(p) + '\n\n' + task : task }],
+      ...(agentPreset === undefined ? {} : { agentPreset }),
+      ...routeOptions,
+    }
     let activation: any
     try {
       activation = await runtime.startActivation({
         provider: kind,
         label: p.name,
         ...(childId === undefined ? {} : { childId }),
-        request: {
-          parent: parentAgent,
-          prompt: [{ type: 'text', text: kind === 'fork' ? renderPersonaPrompt(p) + '\n\n' + task : task }],
-          ...(agentPreset === undefined ? {} : { agentPreset }),
-          ...routeOptions,
-        },
+        ...request,
+        request,
         signal: startSignal,
         delivery: p.continuable === true ? 'parent' : 'caller',
       })

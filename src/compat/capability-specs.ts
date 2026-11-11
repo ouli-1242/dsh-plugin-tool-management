@@ -477,25 +477,25 @@ export const CAPABILITY_SPECS: readonly CapabilitySpec[] = [
     kind: 'write',
     owner: 'subagents',
     fallback: 'refuse-operation',
-    methods: ['startActivation', 'list'],
-    // list() 是只读的 provider 名册：既能证明运行时在，也能核对「名字数组」这个返回形状。
-    // startActivation 不能真调（会启动一个子代理），只核对它是异步方法。
+    methods: ['startActivation', 'getProvider'],
+    // getProvider(name) 是只读的 provider 查询：能证明运行时在，也能核对「按名字查、查不到给
+    // undefined」这个返回形状。startActivation 不能真调（会启动一个子代理），只核对它是异步方法。
+    // 不用 list()：它只在一代宿主上有名册枚举，缺席时只是查不了名字，不是运行时不可用。
     probe: (t) => {
-      const list = (t as { list?: () => unknown }).list
-      if (typeof list !== 'function') return '宿主子智能体运行时缺少 list()'
-      let names: unknown
-      try { names = list.call(t) } catch (error) { return `subagents.list() 抛错：${String((error as Error)?.message ?? error)}` }
-      if (!Array.isArray(names)) return 'subagents.list() 未返回数组：provider 名册读不出来'
-      const invalid = names.find((name) => typeof name !== 'string')
-      if (invalid !== undefined) return 'subagents.list() 的元素不是字符串：provider 名册形状变了'
+      const getProvider = (t as { getProvider?: (name: string) => unknown }).getProvider
+      if (typeof getProvider !== 'function') return '宿主子智能体运行时缺少 getProvider()'
+      let found: unknown
+      try { found = getProvider.call(t, '__dsh_plugin_probe_missing__') } catch (error) { return `subagents.getProvider() 抛错：${String((error as Error)?.message ?? error)}` }
+      if (found !== undefined) return 'subagents.getProvider() 对不存在的 provider 返回了值：名册语义变了'
       return isAsyncFn((t as { startActivation?: unknown }).startActivation)
         ? undefined
         : 'startActivation 不是异步方法：派活调用会同步失败或返回非 Promise'
     },
     describe: (t) => {
       try {
-        const names = (t as { list?: () => unknown }).list?.()
-        return Array.isArray(names) && names.length > 0 ? `已注册 provider：${names.join('、')}` : undefined
+        const getProvider = (t as { getProvider?: (name: string) => unknown }).getProvider
+        const names = ['spawn', 'fork'].filter((name) => getProvider?.call(t, name) !== undefined)
+        return names.length > 0 ? `已注册 provider：${names.join('、')}` : undefined
       } catch { return undefined }
     },
   },
