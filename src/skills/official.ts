@@ -19,6 +19,9 @@ import { clearRuntimeNote, noteRuntime } from "../compat/runtime-notes.js";
 //   - 桌面版：dsh-skill-office 的 assets（office 路由 + office-docx / office-pptx /
 //     office-xlsx）+ diagnose-windows-sandbox-acl（dsh-sandbox-windows-acl 的门控是
 //     `process.platform === "win32"`，rank 600）。
+//   - 预设技能：dsh-agent-preset 的 skills 根（dsh-doc 等）—— 官方预设经
+//     dsh-skill-filesystem 的 customSkillDirs 把这份目录接进会话上下文，属于
+//     「官方自带」，一并收录。
 //   - web 版：沙盒诊断技能由宿主注入（门控只看 win32 —— 用户截图实锤，
 //     按「web 不注入」的误判把 web 挡在门外，会让页面不显示而宿主照注）；office
 //     插件 web 宿主不装配、不注入，但用户要求技能页照样把它们暴露出来
@@ -39,8 +42,6 @@ import { clearRuntimeNote, noteRuntime } from "../compat/runtime-notes.js";
 // 教训：原先共用一份目录，web 启动把它解析到的沙盒技能盖进去，桌面物化好的
 // 一组只剩 1 个；改成各写各的子目录，互不清对方的账。共享布局的残留（旧条目
 // 直接躺在 official-skills/ 下）按已知名单清理。
-//
-//   - 预设参考技能（dsh-agent-preset/skills）不注入会话上下文，不列入。
 //
 // 单个来源、随 DSH 技能之后排列，来源层语义同默认来源（不可移除、无来源开关）。
 
@@ -153,6 +154,20 @@ function officialSandboxSource(): string | null {
       "assets/diagnose-windows-sandbox-acl",
     );
   return source !== null && existsSync(join(source, "SKILL.md")) ? source : null;
+}
+
+/**
+ * 预设技能源头：dsh-agent-preset 的 skills 根。
+ *
+ * 官方预设经 dsh-skill-filesystem 的 customSkillDirs 把这份目录接进会话上下文，
+ * 它和 office / sandbox 一样是「官方自带」，一并收录。桌面 asar 直连优先，其次宿主
+ * 进程解析链；解析不到一律 null —— 不凭空列出。
+ */
+function officialPresetSource(): string | null {
+  const source =
+    desktopPackageDir("@deepseek-ai/dsh-agent-preset", "skills") ??
+    resolvedPackageDir("@deepseek-ai/dsh-agent-preset", "skills");
+  return source !== null && hasSkillDocs(source) ? source : null;
 }
 
 // ── office 技能的「Installed LibreOffice Kit」段 ────────────────────────────
@@ -331,7 +346,8 @@ function cleanupLegacyOfficialLayout(root: string): void {
 function materializeOfficialSkills(): string | null {
   const office = officialOfficeSource();
   const sandbox = officialSandboxSource();
-  if (office === null && sandbox === null) return null;
+  const preset = officialPresetSource();
+  if (office === null && sandbox === null && preset === null) return null;
   // 每种宿主形态只整目录重建**自己**这份（竞态教训见上方块注释）；对方形态的子目录
   // 与共享层残留清理互不干涉。
   const root = join(
@@ -342,9 +358,11 @@ function materializeOfficialSkills(): string | null {
   );
   try {
     rmSync(root, { recursive: true, force: true });
-    // office：整个 assets 根拷进来（office-*/ 与 scripts/ 的相对结构必须保留 ——
-    // SKILL.md 用 `<skill-directory>/../scripts/check_office.py` 引用检查脚本）。
+    // office：整个 assets 根拷进来（每个技能一个子目录，目录之间的相对结构原样保留）。
     if (office !== null) copyDirectorySync(office, root);
+    // 预设技能：技能根下的每个技能目录整体拷进来。这份来源是机器级静态的 ——
+    // 预设没接 customSkillDirs 的模式（minimal / ptc）也会在技能页看到它们。
+    if (preset !== null) copyPresetSkills(preset, root);
     if (sandbox !== null) {
       copyDirectorySync(sandbox, join(root, basename(sandbox)));
     }
@@ -356,6 +374,31 @@ function materializeOfficialSkills(): string | null {
       String((error && (error as Error).message) || error),
     );
     return null;
+  }
+}
+
+/**
+ * 把预设技能根拷进物化目录。
+ *
+ * 同名时整目录替换而不是合并：预设技能是完整的一棵树（SKILL.md + references/ +
+ * templates/），与别的来源同名时合并会拼出两边都不认识的混合体。
+ *
+ * 技能自己的文档按「相对技能基目录」引用 references/ 与 templates/，整体拷贝即可保住；
+ * 它的说明里另有几处假设技能住在官方包内（如「基目录上两级是 agent-preset 的
+ * package.json」），那是源码检出场景下的自证手段，物化成真实目录后不成立 —— 官方文档
+ * 对此的兜底口径是「只报核实过的版本」，不实报即可。
+ */
+function copyPresetSkills(from: string, to: string): void {
+  mkdirSync(to, { recursive: true });
+  for (const entry of readdirSync(from, { withFileTypes: true })) {
+    const source = join(from, entry.name);
+    const target = join(to, entry.name);
+    if (entry.isDirectory()) {
+      rmSync(target, { recursive: true, force: true });
+      copyDirectorySync(source, target);
+    } else if (entry.isFile()) {
+      copyFileSync(source, target);
+    }
   }
 }
 

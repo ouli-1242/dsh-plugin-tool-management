@@ -19,7 +19,7 @@ const CAPABILITY_MANUAL_REVIEWS: readonly ManualReviewItem[] = [
   {
     id: 'official-skill-assets',
     label: '官方技能资产',
-    detail: '只能核对 office / sandbox 资产目录与 SKILL.md 存在；正文语义、LibreOffice Kit 命令是否真能执行，仍需实际调用技能确认。',
+    detail: '只能核对 office / sandbox / 预设技能资产目录与 SKILL.md 存在；正文语义、LibreOffice Kit 命令是否真能执行，仍需实际调用技能确认。',
   },
   {
     id: 'mcp-client.config-schema',

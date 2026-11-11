@@ -224,6 +224,7 @@ const OPTIONAL_PEER_PACKAGES = new Set<string>([
  */
 const OBSERVED_HOST_PACKAGES = [
   '@deepseek-ai/dsh-agent',
+  '@deepseek-ai/dsh-agent-preset',
   '@deepseek-ai/dsh-host-plugin-inventory',
   '@deepseek-ai/dsh-host-webserver',
   '@deepseek-ai/dsh-mcp-client',
@@ -721,8 +722,8 @@ function hostPackageStatuses(hostRoot: string | null, sameAsHost: Record<string,
  * 包还在、`assets/<技能>/SKILL.md` 的形态变了，技能页只会少几个来源（或来源为空），
  * 而能力表全绿 —— 所以单独探测一次。
  *
- * 两个来源分开报：office 与 sandbox 是不同包、不同宿主形态（sandbox 只在 win32 注入），
- * 合成一行会让「其中一个没了」看起来像「整个技能页坏了」。
+ * 三个来源分开报：office、sandbox 与预设技能是不同包、不同宿主形态（sandbox 只在 win32
+ * 注入，预设技能按预设注入），合成一行会让「其中一个没了」看起来像「整个技能页坏了」。
  *
  * @param hostRoot - `.../node_modules/@deepseek-ai` 或 `null`。
  */
@@ -789,6 +790,41 @@ function inspectOfficialSkillAssets(hostRoot: string | null): CapabilityFinding[
           owner: 'plugin', fallback: 'inform-only', state: 'shape-mismatch', missing,
           detail: `沙盒包还在，但 ${missing.join('、')} 不存在：技能页即使列出该技能也跑不起来。`,
         })
+  }
+  const presetRoot = resolvePackage('@deepseek-ai/dsh-agent-preset')
+  if (presetRoot === null) {
+    out.push({
+      id: 'official-preset-skills', label: '官方预设技能资产', kind: 'read',
+      owner: 'plugin', fallback: 'inform-only', state: 'not-available', missing: [], optional: true,
+      detail: '宿主未安装 agent-preset 包：技能页不会出现预设技能（如 dsh-doc）（本部署形态，不是故障）',
+    })
+  } else {
+    const skills = join(presetRoot, 'skills')
+    if (!existsSync(skills)) {
+      out.push({
+        id: 'official-preset-skills', label: '官方预设技能资产', kind: 'read',
+        owner: 'plugin', fallback: 'inform-only', state: 'shape-mismatch', missing: ['skills/*/SKILL.md'],
+        detail: 'agent-preset 包还在，但 skills 目录不见了：预设技能这一来源会是空的。',
+      })
+    } else {
+      let names: string[] = []
+      try {
+        names = readdirSync(skills, { withFileTypes: true })
+          .filter((entry) => entry.isDirectory() && existsSync(join(skills, entry.name, 'SKILL.md')))
+          .map((entry) => entry.name)
+      } catch { names = [] }
+      out.push(names.length === 0
+        ? {
+            id: 'official-preset-skills', label: '官方预设技能资产', kind: 'read',
+            owner: 'plugin', fallback: 'inform-only', state: 'not-available', missing: [], optional: true,
+            detail: 'agent-preset 包在，但 skills 下没有技能目录：这份宿主不带预设技能。',
+          }
+        : {
+            id: 'official-preset-skills', label: '官方预设技能资产', kind: 'read',
+            owner: 'plugin', fallback: 'inform-only', state: 'ok', missing: [],
+            detail: `预设技能源在位（${names.length} 个技能目录）`,
+          })
+    }
   }
   return out
 }
