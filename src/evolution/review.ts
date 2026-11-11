@@ -379,9 +379,14 @@ export function createReviewer(deps: ReviewDeps): {
               ...(item.layer !== undefined ? { layer: item.layer } : {}),
               ...(item.boundary !== undefined ? { boundary: item.boundary } : {}),
               ...(item.ttlDays !== undefined ? { ttlDays: item.ttlDays } : {}),
-              // 后台没有人可弹卡：按自动确认授权直接落 active，由 agent 承担判断；
-              // 与用户手写记忆冲突的条目仍落候选，等用户裁决。
-              autoActive: true,
+              // 后台没有人可弹卡，所以「要不要直接生效」跟随用户自己的授权：
+              // `autoConfirm` 开着 = 用户已同意由 agent 决定，直接落 active；
+              // 关着（默认）= 落候选，在记忆页逐条确认。
+              //
+              // 这里**不能恒为 true**：复习的输入是另一个模型写的转述，未经任何人过目就进入
+              // 之后每一次对话的上下文，与「没卡片时仍待确认」的承诺直接冲突。两种情况都
+              // 越不过用户手写记忆的冲突（门禁里 `user-conflict` 永远等用户裁决）。
+              ...(cfg.autoConfirm === true ? { autoActive: true } : {}),
             },
             cfg,
             {

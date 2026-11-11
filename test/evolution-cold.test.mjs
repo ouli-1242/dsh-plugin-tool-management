@@ -460,6 +460,32 @@ test('reviewer：压缩条目一律按 model_inference，不带伪装成用户�
   assert.equal('quote' in learner.calls[0].req, false)
 })
 
+test('reviewer：自动确认关着时复习不越权 —— 不传 autoActive，条目落候选', async () => {
+  const dir = await tmp()
+  const budget = createReviewBudget({ path: join(dir, 'reviews.json'), max: 2, message })
+  const learner = fakeLearner()
+  const r = createReviewer({ llm: fakeLlm(), learner, budget, catalogLines: async () => [], log, message })
+  await r.review(
+    checkpointEpisodeOf({ session: 's1', seq: 3, at: 'x', checkpoint: '## Critical Context\n- 用中文回复' }),
+    cfgOf({ autoConfirm: false }),
+    { provider: 'p', model: 'm' },
+  )
+  assert.equal('autoActive' in learner.calls[0].req, false, '默认必须落候选等用户确认')
+})
+
+test('reviewer：自动确认开着时复习直接落 active', async () => {
+  const dir = await tmp()
+  const budget = createReviewBudget({ path: join(dir, 'reviews.json'), max: 2, message })
+  const learner = fakeLearner()
+  const r = createReviewer({ llm: fakeLlm(), learner, budget, catalogLines: async () => [], log, message })
+  await r.review(
+    checkpointEpisodeOf({ session: 's1', seq: 3, at: 'x', checkpoint: '## Critical Context\n- 用中文回复' }),
+    cfgOf({ autoConfirm: true }),
+    { provider: 'p', model: 'm' },
+  )
+  assert.equal(learner.calls[0].req.autoActive, true)
+})
+
 test('reviewer：`model` 只写 model 时沿用会话的 provider', async () => {
   const dir = await tmp()
   const budget = createReviewBudget({ path: join(dir, 'reviews.json'), max: 2, message })
