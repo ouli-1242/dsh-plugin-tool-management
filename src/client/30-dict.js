@@ -264,7 +264,7 @@
         "evo.pending.short": "待确认 {count} 条",
         "evo.settings": "设置",
         "evo.scope.global": "全局",
-        "evo.scope.workspace": "本工作区",
+        "evo.scope.workspace": "工作区",
         "evo.scope.session": "本会话",
         "evo.inherit": "继承",
         "evo.on": "开",
