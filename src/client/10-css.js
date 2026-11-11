@@ -164,11 +164,12 @@ button.dsm-qty:disabled{cursor:default}
 /* ── 自主记忆（条目在记忆页签上以两张卡显示，弹窗只留设置与学习记录）────
    页签卡复用 .dsm-source 骨架（与场景卡同一套头 / 计数 / 折叠）；行沿用 .dsm-listrow。
    弹窗按「学习范围 / 笔记风格 / 学习记录」分组：开关统一右对齐，整理与后台复习同卡展示。 */
-.dsm-evo-head-on{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
+/* 入口按钮只让**边框**表达状态，文字保持常规色（用户 2026-11-11）：按钮就在页头那一排
+   次级键里，文字染色会让它看起来像另一种控件，而不是同一个键的不同状态。 */
+.dsm-evo-head-on{border-color:var(--dsw-alias-state-success-primary)}
 /* 有待确认笔记时压过绿色：要用户处理比「功能开着」更该显眼。 */
-.dsm-evo-head-on.dsm-evo-head-pending{border-color:var(--dsm-warn);color:var(--dsm-warn)}
-.dsm-evo-head-pending{border-color:var(--dsm-warn);color:var(--dsm-warn)}
-.dsm-evo-head-pending .dsm-count{color:var(--dsm-warn)}
+.dsm-evo-head-on.dsm-evo-head-pending{border-color:var(--dsm-warn)}
+.dsm-evo-head-pending{border-color:var(--dsm-warn)}
 .dsm-modal-evo{width:min(720px,100%)!important}
 .dsm-evo-modal{display:flex;flex-direction:column;gap:16px;max-height:70vh;overflow:auto}
 /* 设置行统一两列：左标题，右控件固定列。开关不再跟着标签宽度跑。 */
