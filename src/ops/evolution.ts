@@ -145,11 +145,12 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
           const st = view.state.entries[e.id]
           return st && typeof st.needsReview === 'string' && st.needsReview !== ''
         }).length
-        // 「待确认」= 当前会话看得见的候选：全局层 + 本工作区。别的仓库的候选不在这里
-        // 计数，否则页头徽标会说「3 条待确认」而卡片里只有 1 条。
-        const visibleHere = (e: any): boolean => e.layer === 'global' || (hash !== undefined && e.workspace === hash)
-        const pending = entries.filter((e) => e.status === 'candidate' && visibleHere(e)).length
-        const archived = entries.filter((e) => e.status === 'archived' && visibleHere(e)).length
+        // 「待确认」必须与页面上**看得见的行**同口径：记忆页的工作区卡把所有工作区
+        // 合成一张列出，所以这里也数全部候选。此前按「全局 + 本工作区」过滤，卡片上有
+        // 3 条待确认、计数却写 1 条 —— 而 `已学` / `生效` 本来就是全库口径，三个数里
+        // 只有这一个被收窄，用户只能以为计数坏了。
+        const pending = entries.filter((e) => e.status === 'candidate').length
+        const archived = entries.filter((e) => e.status === 'archived').length
 
         return {
           ok: true,
