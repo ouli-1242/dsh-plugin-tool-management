@@ -11,7 +11,7 @@ import assert from 'node:assert/strict'
 import { createToolVisibility } from '../lib/mcp/tool-visibility.js'
 
 /** 一套最小假宿主：工具全集、agent scope、restrict 的记账。 */
-function fakeHost({ all, pluginHidden = [], carrierOf = () => [] }) {
+function fakeHost({ all, pluginHidden = [], carrierOf = () => [], overlayOf }) {
   const state = { deny: null, installs: 0 }
   const scopedTools = {
     restrict({ deny }) {
@@ -40,6 +40,7 @@ function fakeHost({ all, pluginHidden = [], carrierOf = () => [] }) {
     MCP_KNOWN_TOOLS_FILE: 'known',
     pluginHiddenTools: () => pluginHidden,
     carrierHiddenTools: (a) => carrierOf(tools, a),
+    ...(overlayOf === undefined ? {} : { sessionToolTableOverlay: (a) => overlayOf(tools, a) }),
   })
   return { vis, agent, state }
 }
@@ -72,6 +73,25 @@ test('同步装层：全局关掉的工具与载体让位并进同一层', () =>
   })
   vis.attachAgent(agent)
   assert.deepEqual([...state.deny].sort(), ['memory_note', 'skill_manager_read'])
+})
+
+test('同步装层：会话 allow 不能把载体让位那条重新放回来', async () => {
+  // 现场：全局工具表关着两条，本会话的创建时 baseline 不含它们 → 会话覆盖算出 allow。
+  // 会话 allow 该赢过全局关停（用户显式重新打开），但**不能**赢过载体让位 ——
+  // 让位判的是"官方 skill 已在场，这条只是重复"，不是可见性偏好。
+  // 两段一旦判反，首轮有、第二步没，轨迹上又是一次「移除工具」。
+  const { vis, agent, state } = fakeHost({
+    all: ['skill', 'skill_manager_read', 'memory_get', 'read'],
+    pluginHidden: ['skill_manager_read', 'memory_get'],
+    carrierOf: (tools, a) => (tools.get('skill', a) !== undefined ? ['skill_manager_read'] : []),
+    overlayOf: () => ({ allow: ['skill_manager_read', 'memory_get'], deny: [] }),
+  })
+  vis.attachAgent(agent)
+  const syncDeny = state.deny === null ? [] : [...state.deny].sort()
+  assert.deepEqual(syncDeny, ['skill_manager_read'], '会话 allow 只减全局那半边，载体让位加在它之后')
+  await new Promise((r) => setTimeout(r, 20))
+  const asyncDeny = state.deny === null ? [] : [...state.deny].sort()
+  assert.deepEqual(asyncDeny, syncDeny, '同步段与异步段必须给出同一份名单')
 })
 
 test('同步装层：载体判据返回 Promise 时跳过它，其余同步判据照装', async () => {
