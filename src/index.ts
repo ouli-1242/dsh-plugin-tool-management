@@ -4556,7 +4556,8 @@ export default {
       }
       if (scope?.locked === true) {
         const layer = isWorkspaceScopeKey(sessionId) ? '工作区' : '会话'
-        return { ok: false, error: `${layer}「${scopeKeyLabel(sessionId)}」的作用域已锁定：先解锁再改` }
+        // `code` 给模型侧：面板读 `error`（中文，读者是人），控制面工具按 code 换英文。
+        return { ok: false, code: 'scopeLocked', error: `${layer}「${scopeKeyLabel(sessionId)}」的作用域已锁定：先解锁再改` }
       }
       // 第一次写时补一份基线：退出场景要回到"这个对话创建时"的那份名单。
       if (scope?.baseline === undefined) {
@@ -6060,6 +6061,8 @@ export default {
       toolTableSizes,
       toolTableSummaries,
       hiddenForSession: (agent: unknown) => toolTableHiddenForSession(scopeKeyForAgent(agent)),
+      // 子代理不改父会话的工具表（判据与注入域同一份深度口径）。
+      subagentDepth: (agent: unknown) => subagentDepthOf(agent),
       // 逐条改管着这个对话的那一层的工具表：走面板同一条路（`tool-table` op 的
       // `toggle` 那一支），锁、基线补写、可见性重排、两个目录重算全都照旧；
       // 逐条改在写锁里现读现改，不会把面板刚写进去的东西覆盖掉。
@@ -6077,6 +6080,11 @@ export default {
         // 模型侧直调 handler 不经过 HTTP 路由，那条路由才会记流水 —— 这里自己记一条，
         // 否则「谁改了工具表」在「最近改动」里查不到。
         modelAudit('tool-table', args, r)
+        // 锁定的拒绝文案在 op 里是中文（面板的读者是人）：模型这条回执换成英文，
+        // 与其余工具回执同一种语言。判据用 `code`，不靠匹配中文串。
+        if (r && r.ok === false && r.code === 'scopeLocked') {
+          return { ok: false, error: 'the scope that governs this conversation is locked, so its tool table cannot be changed here: the user has to unlock it first.' }
+        }
         if (!r || r.ok === false) return { ok: false, error: (r && r.error) || 'failed to save the tool table' }
         return { ok: true }
       },

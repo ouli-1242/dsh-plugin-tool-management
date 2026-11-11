@@ -46,6 +46,14 @@ export interface ControlToolDeps extends ToolDomainDeps {
    */
   applyToolTable(agent: unknown, changes: Array<{ name: string; hidden: boolean }>): Promise<{ ok: boolean; error?: string }>
   /**
+   * 这个 agent 的委派深度（顶层 = 0）。缺省按 0 算。
+   *
+   * 子代理与父会话**共用**一份工具表（`scopeKeyOfAgent` 向上找到根会话），所以子代理调
+   * `enable` / `disable` 改的是父会话那一层 —— 一次本该局限在子任务里的调整会留到父会话
+   * 之后的每一轮。判据与注入域同一份（`subagentDepthOf`），不另写一套。
+   */
+  subagentDepth?(agent: unknown): number
+  /**
    * 修复类动作：把**已损坏**的侧车改名留存、按空表继续。
    *
    * 这四个 op 在登记表里刻意**不冻结**（恢复路径不能被场景锁挡在门外），但模型此前
@@ -135,6 +143,11 @@ export function buildControlTools(deps: ControlToolDeps): void {
         if (action === 'disable' && known.includes(CONTROL_TOOL_NAME)) {
           throw new Error('this tool cannot switch itself off — it is the only way back to the others. Only the user can disable it (in the panel).')
         }
+        // 子代理不改工具表：它和父会话共用同一份名单，改完会留到父会话之后的每一轮。
+        // `list` 仍放行 —— 读一眼不改变任何状态。
+        if ((deps.subagentDepth?.(agent) ?? 0) >= 1) {
+          throw new Error('this runs in a subagent, which shares its parent conversation\'s tool table: switching tools here would change the parent conversation. Ask the parent agent (or the user) to make the change.')
+        }
         const hidden = deps.hiddenForSession(agent)
         // 逐条改：每一处改动是一个「关掉 / 打开某一条」，写侧在锁里现读现改。
         const changes = known.map((name) => ({ name, hidden: action === 'disable' }))
@@ -153,7 +166,7 @@ export function buildControlTools(deps: ControlToolDeps): void {
         lines.push('Entering or leaving a scene re-applies that scene\'s tool-table scheme here.')
         // 说清「这一层看得见的条数」：模型据此判断自己还有没有别的路。
         // 总数同样不含自主记忆那条工具：它不在工具表里，也不该出现在「N 条工具」的分母里。
-  const total = deps.toolTableSizes.size - (deps.toolTableSizes.has(PROACTIVE_MEMORY_TOOL) ? 1 : 0)
+        const total = deps.toolTableSizes.size - (deps.toolTableSizes.has(PROACTIVE_MEMORY_TOOL) ? 1 : 0)
         const offHere = next.filter((name) => name !== PROACTIVE_MEMORY_TOOL).length
         lines.push((total - offHere) + ' of ' + total + ' tools are available here now.')
         return lines.join('\n')
@@ -202,10 +215,13 @@ function listTools(deps: ControlToolDeps, agent: unknown): string {
   }
   // 总数同样不含自主记忆那条工具：它不在工具表里，也不该出现在「N 条工具」的分母里。
   const total = deps.toolTableSizes.size - (deps.toolTableSizes.has(PROACTIVE_MEMORY_TOOL) ? 1 : 0)
+  // 层级必须说清：模型要知道自己刚读的是「这个对话关着的」还是「整台机器关着的」——
+  // 它决定该不该去调 enable（全局粒度下那一改动的是所有对话）。与 `enable` / `disable`
+  // 的回执用同一句（`governingScopeNote`），两处不会各说一套。
   if (rows.length === 0) {
-    return 'every tool of this plugin is already on here (' + total + ' tools); nothing to enable.'
+    return 'every tool of this plugin is already on here (' + total + ' tools)' + governingScopeNote(deps) + '; nothing to enable.'
   }
-  return 'tools switched off here (' + rows.length + ' of ' + total + '):\n' +
+  return 'tools switched off here (' + rows.length + ' of ' + total + ')' + governingScopeNote(deps) + ':\n' +
     rows.join('\n') +
     '\ncall this tool with action="enable" and the names you need (one or more).'
 }
