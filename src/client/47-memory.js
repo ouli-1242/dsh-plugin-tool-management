@@ -1563,8 +1563,9 @@
                   'aria-expanded': reviewOpen && learned.length > 0,
                   disabled: learned.length === 0,
                   onClick: function () { toggleCollapse('evo:review', !reviewOpen) },
-                }, t('evo.queue.title'),
-                  learned.length > 0 ? React.createElement('span', { key: 'n', className: 'dsm-count dsm-count-tight' }, String(learned.length)) : null),
+                },
+                  learned.length > 0 ? React.createElement(CaretIcon, { key: 'caret', open: reviewOpen, className: 'dsm-evo-review-caret' }) : null,
+                  t('evo.queue.title')),
                 lastAt ? React.createElement('span', { className: 'dsm-help' }, t('evo.review.last', { time: evoTimeText(lastAt) })) : null,
                 (failed + dead + orphan > 0)
                   ? React.createElement('button', {
