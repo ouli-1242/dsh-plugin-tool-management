@@ -1419,6 +1419,17 @@
       const injectParts = []
       if (inject) {
         const domains = (inject && inject.domains) || {}
+        // 域名与顺序都取响应里的 `domains`：服务端已按注入域清单规范化成完整的七个键，
+        // 界面再写一份字面量就会在加域 / 调序时与注入通道对不上。
+        //
+        // 两块记忆在界面上合成一颗「记忆」：后端仍保留 `memoryGlobal` / `memoryWorkspace`
+        // 两个域（各自预算、各自快照），开关处只把这个合成键同时写进两个布尔值，避免出现
+        // 「界面上关了、实际还剩半层在注入」的半开状态。
+        const chipKeys = Object.keys(domains).reduce(function (out, key) {
+          if (key === 'memoryWorkspace') return out
+          out.push(key === 'memoryGlobal' ? 'memory' : key)
+          return out
+        }, [])
         injectParts.push(
             // 开关行（REDESIGN §5.2，切片五换装）：总开关一行。
             React.createElement(SettingsRow, { key: 'force', name: t('compat.inject.force'),
@@ -1433,18 +1444,16 @@
             // a11y：role=switch + aria-checked 挂在 chip 上（它就是一个开关，只是长成了标签的样子），
             // 键盘可聚焦、Enter/Space 由 button 语义自带。
             React.createElement('div', { key: 'domains', className: 'dsm-inject-domains' },
-              // 域名与顺序都取响应里的 `domains`：服务端已按注入域清单规范化成完整的七个键，
-              // 界面再写一份字面量就会在加域 / 调序时与注入通道对不上。
-              //
-              // 两块记忆各有自己的开关：全局记忆与当前工作区记忆是两份文件，用户在"这个仓库里
-              // 不注入记忆、全局的仍要"时必须能分开关；合成一颗只能同开同关。
-              Object.keys(domains).map(function (key) {
+              chipKeys.map(function (key) {
+                const merged = key === 'memory'
                 // 技能与提示词两域在标准类预设下由宿主送、本插件让位 —— 关掉它们时本插件会连
                 // 宿主那条一起拦下（见 context-inject.ts 的 officialKindsToSuppress）。这里给
                 // 那两项一句 title，免得用户以为"关了没用"。
                 const carrier = key === 'skills' || key === 'prompt'
-                const on = domains[key] !== false
-                // 有专属说明的域（两块记忆）用自己的 title，其余回落到通用的 carrier 说明。
+                const on = merged
+                  ? domains.memoryGlobal !== false || domains.memoryWorkspace !== false
+                  : domains[key] !== false
+                // 有专属说明的域用自己的 title，其余回落到通用的 carrier 说明。
                 const tipKey = 'compat.inject.domain.' + key + '.title'
                 const tip = t(tipKey)
                 const title = tip !== tipKey ? tip : carrier ? t('compat.inject.domain.carrier.title') : undefined
@@ -1458,7 +1467,12 @@
                   'aria-label': t('compat.inject.domain.' + key),
                   onClick: function () {
                     const nextDomains = Object.assign({}, domains)
-                    nextDomains[key] = !on
+                    if (merged) {
+                      nextDomains.memoryGlobal = !on
+                      nextDomains.memoryWorkspace = !on
+                    } else {
+                      nextDomains[key] = !on
+                    }
                     saveInject({ domains: nextDomains })
                   },
                 },
