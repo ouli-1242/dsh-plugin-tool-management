@@ -34,7 +34,7 @@ export interface CandidateOpsDeps {
   readDisabledToolsResult(force?: boolean): Promise<DisabledToolsRead>
   presetNames(): Promise<Array<{ id: string; name: string; trust: string }>>
   memorySceneCandidates(): Promise<Array<{ name: string; label: string; description: string; count: number; global: boolean }>>
-  memoryCandidates(): Promise<Array<{ id: string; scene: string; name: string; description: string }>>
+  memoryCandidates(): Promise<Array<{ id: string; scene: string; name: string; excerpt: string; description: string; attach?: { count: number; bytes: number; names: string[] } }>>
 }
 
 /** 候选源的只读 op：给场景 / 人设表单按需拉「有哪些预设、各自带哪些工具」。 */

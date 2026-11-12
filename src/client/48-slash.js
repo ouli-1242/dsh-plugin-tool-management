@@ -402,7 +402,7 @@
               const wsHash = isWs ? String(r.group || '').split('/')[1] || '' : ''
               const wsName = wsHash !== '' ? (wsLabels[wsHash] || '') : ''
               return {
-                id: r.id, key: r.id, label: r.name, on: mc.on, scoped: mc.scoped, note: r.description,
+                id: r.id, key: r.id, label: r.name, on: mc.on, scoped: mc.scoped, note: r.excerpt || r.description,
                 scene: scene,
                 group0: String(r.group || ''),
                 // 打了字会跨场景搜，那时按场景分组才看得清是哪里的记忆。

@@ -306,6 +306,10 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-evo-review-toggle{display:inline-flex;align-items:center;gap:6px;padding:0;border:0;background:transparent;color:var(--dsw-alias-label-tertiary);font-size:12px;font-weight:600;line-height:17px;cursor:pointer}
 .dsm-evo-review-toggle:disabled{cursor:default}
 .dsm-evo-review-head .dsm-help{margin:0;margin-left:auto}
+/* 自主记忆卡底部的「已归档」折叠区：用一条细线与上面的生效行分开 ——
+   它们不再注入，混在同一张清单里读起来像还生效。 */
+.dsm-evo-archived{display:flex;flex-direction:column;gap:4px;margin-top:2px;padding-top:6px;border-top:1px solid var(--dsw-alias-line-secondary)}
+.dsm-evo-archived-list{display:flex;flex-direction:column}
 /* 每会话复习上限：一句话里一个数字框，与「学习频率」那条同一版式。 */
 .dsm-evo-review-limit{display:flex;align-items:center;gap:6px;flex-wrap:wrap;color:var(--dsw-alias-label-primary);font-size:12px;line-height:17px}
 /* 框内其余文字也用主色：这些是设置项的当前值，用户要读清楚「现在设的是几」。 */
@@ -650,14 +654,13 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-compat-pill-warn{border-color:var(--dsm-warn);color:var(--dsm-warn)}
 .dsm-compat-reach-marks{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:4px;min-width:0}
 .dsm-inject-settings{display:flex;flex-direction:column;gap:8px;padding:8px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-2)}
-/* 注入域开关：八颗 chip 排成等宽网格（用户 2026-11-10：「这个排版设计好点」）。
-   此前是 flex 等分，最后一行只剩两颗时会被 flex:1 1 0 拉成整行宽的两大块；
-   改成 4 列 grid 后每颗同宽，八颗正好两行。窄栏（≤640px）退成两列，保证
-   「工作区自动记忆」这类长标签不被截断。
+/* 注入域开关：每颗 chip 等宽，按可用宽度自动折行（用户 2026-11-10：「这个排版设计好点」）。
+   此前是 flex 等分，最后一行只剩两颗时会被 flex:1 1 0 拉成整行宽的两大块；改成 grid
+   后每颗同宽。列数不写死：域清单由服务端给，加一域不该让最后一行只剩一颗孤零零的
+   （七域在 6 列下就是这种形状）。minmax 下限保证「工作区笔记」这类长标签不被截断。
    开/关不只靠颜色：chip 里有一颗 6px 圆点，开 = 成功色实心、关 = 当前字色半透明，
    色盲或低对比屏上也能分辨；再加 role=switch + aria-checked 供读屏。 */
-.dsm-inject-domains{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px}
-@media (max-width:640px){.dsm-inject-domains{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.dsm-inject-domains{display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:6px}
 .dsm-inject-chip{box-sizing:border-box;display:inline-flex;width:100%;min-width:0;min-height:32px;align-items:center;justify-content:center;gap:6px;padding:0 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:12px;line-height:18px;white-space:nowrap;cursor:pointer}
 .dsm-inject-chip:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .dsm-inject-chip:focus-visible{outline-style:solid;outline-color:var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-width:var(--dsw-focus-ring-width,2px);outline-offset:2px}
@@ -693,6 +696,9 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-tooltable-summary{display:flex;align-items:center;gap:8px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
 /* 会话层那一句（0.21.2）：这张工具表归属哪一层、改动影响谁。 */
 .dsm-tooltable-scope{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+/* 「另有 1 个跟随记忆页总开关 · 实际下发 N 个」：不在表里占行，用弱一档的字色挂在合计下面，
+   与上面的手动合计分开读。 */
+.dsm-tooltable-derived{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
 /* 「保存方案 / 恢复方案」钉在合计那一行的最右（用户 2026-09-23 指定位置）。
    按钮压到与 18px 行高齐平：宿主默认的 .dsm-btn 比这行字高，直接放会把整行顶开。 */
 .dsm-tooltable-preset-actions{display:flex;flex:none;align-items:center;gap:4px;margin-left:auto}

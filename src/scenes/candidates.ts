@@ -122,7 +122,7 @@ export interface Candidates {
    */
   modelReasoning(provider: string, model: string): Promise<ModelReasoningResult>
   /** 档案编辑器第 4 段的记忆候选。 */
-  memoryCandidates(): Promise<Array<{ id: string; scene: string; name: string; description: string; attach?: { count: number; bytes: number; names: string[] } }>>
+  memoryCandidates(): Promise<Array<{ id: string; scene: string; name: string; excerpt: string; description: string; attach?: { count: number; bytes: number; names: string[] } }>>
   /** 档案编辑器第 4 段的分组维度（场景 + 记忆条数）。 */
   memorySceneCandidates(): Promise<Array<{ name: string; label: string; description: string; count: number; global: boolean }>>
 }
@@ -303,13 +303,16 @@ export function createCandidates(deps: CandidateDeps): Candidates {
   }
 
   /**
-   * 记忆候选（档案编辑器第 4 段「记忆」）：`[{ id, scene, name, description, attach? }]`。
+   * 记忆候选（档案编辑器第 4 段「记忆」）：`[{ id, scene, name, excerpt, description, attach? }]`。
    * 只读、不读正文（勾选集只存 id）；任何异常降级为空列表，不让档案弹窗崩掉。
+   *
+   * `excerpt` 是服务端从正文首行截出的摘要，供选择器扫读；`description` 是旧字段，
+   * 规则本身没有独立说明，保留只为兼容旧的读取方。
    *
    * `attach` 是宿主在 `rules-list` 里给 bundle 记忆补的附件摘要，这里原样带过去 ——
    * 场景编辑器要在行上标一枚回形针，让用户看见"勾这条会连带把参考资料一起带进场景"。
    */
-  async function memoryCandidates(): Promise<Array<{ id: string; scene: string; name: string; description: string; attach?: { count: number; bytes: number; names: string[] } }>> {
+  async function memoryCandidates(): Promise<Array<{ id: string; scene: string; name: string; excerpt: string; description: string; attach?: { count: number; bytes: number; names: string[] } }>> {
     try {
       const r: any = await memoriesService.ops['rules-list']({})
       if (!r || r.ok === false) return []
@@ -319,6 +322,7 @@ export function createCandidates(deps: CandidateDeps): Candidates {
           id: String(x.id),
           scene: String(x.group || ''),
           name: String(x.name || ''),
+          excerpt: String(x.excerpt || ''),
           description: String(x.description || ''),
           ...(x.attach ? { attach: x.attach } : {}),
         }))

@@ -10,7 +10,9 @@
             if (sceneFilter !== '' && sceneOfGroup(r.group) !== sceneFilter) return false
             if (!q) return true
             return (r.name || '').toLowerCase().indexOf(q) >= 0
-              || (r.description || '').toLowerCase().indexOf(q) >= 0
+              // 搜索改用 `excerpt`（正文首行）：用户找一条记忆时记得的是正文里的说法，
+              // 不是那条独立维护的 `description`。旧数据没有 `excerpt` 时退回 description。
+              || (r.excerpt || r.description || '').toLowerCase().indexOf(q) >= 0
               || (r.group || '').toLowerCase().indexOf(q) >= 0
           }
           // 场景 → 记忆：场景元数据来自宿主 scenes（含**空场景**与保留场景 global），

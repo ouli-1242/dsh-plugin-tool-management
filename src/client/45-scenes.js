@@ -722,7 +722,8 @@
             var q = String(modal.memQuery || '').trim().toLowerCase()
             var items = checkedFirst('memories', q ? own.filter(function (m) {
               return String(m.name).toLowerCase().indexOf(q) >= 0
-                || String(m.description || '').toLowerCase().indexOf(q) >= 0
+                // 与记忆页同一口径：搜索命中正文首行（`excerpt`），旧数据退回 description。
+                || String(m.excerpt || m.description || '').toLowerCase().indexOf(q) >= 0
             }) : own, function (m) { return String(m.id) }, function (m) { return memoryEnabled(String(m.id)) })
             var enabledCount = own.filter(function (m) { return memoryEnabled(String(m.id)) }).length
             // 草稿**另算一栏**（`· N 条待创建`），不并进 `x/y 已勾选`：那一栏是「全选 / 全不选」
@@ -764,14 +765,17 @@
                 onChange: function () { togglePendingMemory(i) },
               })
             }).concat(items.map(function (m) {
+              // 记忆正文首行由服务端以 `excerpt` 给出（`description` 是另一份独立维护的说明）；
+              // 旧数据没有 `excerpt` 时才退回 description。
+              var desc = m.excerpt || m.description || ''
               return RowSelect({
                 disabled: busy,
                 key: m.id,
                 checked: memoryEnabled(String(m.id)),
                 name: m.name,
                 // 记忆描述是自由正文的首行，可能很长：截断到 MEM_DESC_MAX，全文放 title。
-                desc: m.description ? clipText(m.description, MEM_DESC_MAX) : null,
-                descTitle: m.description || null,
+                desc: desc ? clipText(desc, MEM_DESC_MAX) : null,
+                descTitle: desc || null,
                 // 单行：描述排在名字右边（用户 2026-11-06）。
                 compact: true,
                 // 带附件的 bundle 记忆标一枚回形针 + 个数（见 attachMark）。

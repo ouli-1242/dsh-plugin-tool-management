@@ -88,9 +88,14 @@
           var scopeState = useScopeLayer()
           /** 取数用的会话 id：全局层传空串（= 服务端按全局口径算）。 */
           function scopeSessionId() { return scopeIsSession() ? scopeState.sessionId : '' }
+          // 切层 / 进场景会连着发几次 rules-list；只认最后一次请求的结果 —— 否则先发后到的
+          // 旧响应会把界面盖回上一层的数据，用户看到的是"切了层，列表还是旧的"。
+          var refreshSeqRef = React.useRef(0)
           function refresh(silent) {
+            var seq = ++refreshSeqRef.current
             if (!silent) setData(function (prev) { return Object.assign({}, prev, { loading: true, error: null }) })
             apiCall('rules-list', { sessionId: scopeSessionId() }).then(function (r) {
+              if (seq !== refreshSeqRef.current) return
               if (r && r.ok) {
                 // 合并式更新：只覆盖本页由 rules-list 驱动的字段，其余 state 键保持不变。
                 // `anyLocked` / `activeScene` 必须一起合并 —— 它们此前**从没被写进 state**
@@ -115,6 +120,7 @@
                 setData(function (prev) { return Object.assign({}, prev, { loading: false, error: translateError(t, r), rules: [], scenes: [], activeMode: 'all', sceneMemory: EMPTY_MEMORY, stats: EMPTY_STATS, warnings: [] }) })
               }
             }).catch(function (e) {
+              if (seq !== refreshSeqRef.current) return
               setData(function (prev) { return Object.assign({}, prev, { loading: false, error: errMsg(e), rules: [], scenes: [], activeMode: 'all', sceneMemory: EMPTY_MEMORY, stats: EMPTY_STATS, warnings: [] }) })
             })
           }
@@ -496,13 +502,9 @@
 
           // ── 渲染 ──
           var stats = data.stats || EMPTY_STATS
-          // 注入预算：宿主 rules-list 一直在返回 sceneMemory，但此前从未渲染 ——
-          // 于是"超出预算、部分记忆没进提示词"对用户完全不可见。
-          // 展示位 2026-10-12 搬到页头统计格（原来在工具条右侧，带一条 72px 进度条）；
-          // 进度条随之下线，超限改由整格转错误色 + 标签补「已超限」表达。
+          // 场景段的截断 / 丢弃清单仍来自 rules-list 的 `sceneMemory`；注入预算的已用
+          // 改由服务端 `auto.injectBytes` 给（见下方预算那段），这里不再自己算上限与已用。
           var memInfo = data.sceneMemory || EMPTY_MEMORY
-          var memMax = Number(memInfo.maxBytes) || 0
-          var memUsed = Number(memInfo.usedBytes) || 0
           var droppedNames = React.useMemo(function () {
             return (memInfo.dropped || []).map(function (d) { return (d.scene ? d.scene + '/' : '') + d.name })
           }, [memInfo])
@@ -652,8 +654,11 @@
             // （`📎 N 个附件`）已经说清了。`memory.form.*` 两个键**仍然在用**（回收站/导出
             // 里按 `'memory.form.' + …` 计算取词），别顺手删掉。
             var attachNode = attachTag(r, shadowed)
+            // 列表摘要用正文首行（`excerpt`）；旧数据没有这个字段时退回 `description`，
+            // 否则升级后老记忆的行会突然只剩名称。
+            var excerptText = r.excerpt || r.description || ''
             var metaBits = [
-              r.excerpt ? React.createElement('span', { key: 'excerpt', className: 'dsm-listrow-meta-desc', title: r.excerpt }, r.excerpt) : null,
+              excerptText ? React.createElement('span', { key: 'excerpt', className: 'dsm-listrow-meta-desc', title: excerptText }, excerptText) : null,
               groupLabelOf(r) ? React.createElement('span', { key: 'group', className: 'dsm-listrow-meta-info' }, groupLabelOf(r)) : null,
             ]
             // 名称旁那颗体积：纯量值、不可点，所以是 span；等宽数字免得整列右缘跟着抖。
@@ -1187,7 +1192,7 @@
           }
 
           /**
-           * 否决当前这条 → 归档（不再注入、列表里收起、随时可恢复），然后进入下一条。
+           * 否决当前这条 → 归档（不再注入、收进列表底部的「已归档」、随时可恢复），然后进入下一条。
            *
            * 不用 `evolution-forget`：那条会删文件并写墓碑，30 天内同义内容学不回来 ——
            * 「这条我不要」和「这个说法以后都别记」是两件事，否决只该表达前一件。
@@ -1306,6 +1311,23 @@
             }).catch(function (e) { setEvoBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }
 
+          /**
+           * 已归档 → 生效。
+           *
+           * 归档只是"不再注入"，文件与正文都还在；恢复就是把状态拨回 `active`。
+           * 不走回收站：回收站管的是删除，已归档的条目从没进过那里。
+           */
+          function restoreEvolution(id) {
+            setEvoBusy(true)
+            apiCall('evolution-set-status', { id: id, status: 'active' }).then(function (res) {
+              setEvoBusy(false)
+              if (res && res.ok !== false) {
+                setResult({ ok: true, text: t('evo.restored') })
+                refreshEvolution()
+              } else setResult({ ok: false, text: translateError(t, res) })
+            }).catch(function (e) { setEvoBusy(false); setResult({ ok: false, text: errMsg(e) }) })
+          }
+
           /** 算整理草案（只读）。结果留在卡片里，用户逐条「应用」。 */
           function runOrganize() {
             setEvoOrg({ busy: true, drafts: null, scanned: 0, error: null })
@@ -1403,11 +1425,18 @@
             // 复核，偏好 / 纠正不过期），属于「这条是什么」而不是「这条说了什么」，
             // 跟正文摘要挤在一行会被长摘要挤掉。
             var kindTag = null
+            var kindLabel = ''
+            var kindTtl = ''
             if (e.kind) {
               var kindKey = 'evo.kind.' + String(e.kind)
               var kindText = t(kindKey)
               // 字典里没有这个值时 `t` 会原样回传键名：宁可不显示，也不要把 `evo.kind.xxx` 摆给用户看。
               if (kindText !== kindKey) {
+                kindLabel = kindText
+                // 保质期与复习弹窗同一判据：事实 / 做法 30 天后提醒复核，偏好 / 纠正不过期。
+                kindTtl = (e.kind === 'fact' || e.kind === 'procedure')
+                  ? t('evo.review.kind.ttl30')
+                  : t('evo.review.kind.ttlForever')
                 kindTag = React.createElement('span', { key: 'kind', className: 'dsm-kind-tag' }, kindText)
               }
             }
@@ -1415,7 +1444,16 @@
             // 用户看一眼确认仍然成立就点菜单里的「复核」，计时重新开始。
             // 与 `pendingReason`（待裁决，不注入）是两个字段：合成一个就会出现
             // "提醒一下 → 这条从上下文里消失"，界面还显示生效。
+            //
+            // `reviewDue` 不是日期：维护扫描写进去的是标记串（如 `ttl`）。直接当 tooltip 会把
+            // 内部标记摆给用户看，所以这里换成本地的一句话，类型已知时带上类型。
             if (e.reviewDue) metaBits.push(React.createElement('span', { key: 'review', className: 'dsm-listrow-meta-info' }, t('evo.review.needed')))
+            var reviewTip = ''
+            if (e.reviewDue) {
+              reviewTip = kindLabel !== ''
+                ? t('evo.review.tip', { kind: kindLabel, ttl: kindTtl })
+                : t('evo.review.tipNoKind')
+            }
             // 停用由行内开关承担（与记忆行同构）；菜单里只留编辑、复核与删除。
             var menuItems = [
               { key: 'edit', label: t('btn.edit'), disabled: evoBusy, onClick: function () { openEvolutionEditor(e) } },
@@ -1429,7 +1467,7 @@
               nameAfter: React.createElement('span', { className: 'dsm-qty' }, t('memory.size.tokens', { count: Number(e.tokens) || 0 })),
               tag: kindTag,
               meta: metaBits.length ? metaBits : undefined,
-              metaTitle: e.pendingReason || e.reviewDue || undefined,
+              metaTitle: e.pendingReason || reviewTip || undefined,
               // 候选行右侧是「查看」：先读正文再决定要不要它 —— 确认一条没看过的记忆是盲签，
               // 而它会进入之后每一次对话的上下文。生效行是开关，与记忆行同一语义：
               // 关 = 不再注入，条目保留。
@@ -1516,7 +1554,7 @@
             }
             // 学到的那几行默认收起（用户 2026-11-11）：它是**历史**，不是待办。开着只会让
             // 「学习记录」这张卡越翻越长，而真正需要动手的是下面的失败项 —— 那一块不折叠。
-            var reviewOpen = collapsed['evo:review'] !== true
+            var reviewOpen = collapsed['evo:review'] === true
             return React.createElement('div', { className: 'dsm-evo-review' },
               // 标题行在框外（与学习频率同版式）：左边是可折叠的标题，右边是最近时间与重试。
               React.createElement('div', { className: 'dsm-evo-review-head' },
@@ -1524,7 +1562,7 @@
                   type: 'button', className: 'dsm-evo-section-title dsm-evo-review-toggle',
                   'aria-expanded': reviewOpen && learned.length > 0,
                   disabled: learned.length === 0,
-                  onClick: function () { toggleCollapse('evo:review', reviewOpen) },
+                  onClick: function () { toggleCollapse('evo:review', !reviewOpen) },
                 }, t('evo.queue.title'),
                   learned.length > 0 ? React.createElement('span', { key: 'n', className: 'dsm-count dsm-count-tight' }, String(learned.length)) : null),
                 lastAt ? React.createElement('span', { className: 'dsm-help' }, t('evo.review.last', { time: evoTimeText(lastAt) })) : null,
@@ -1612,8 +1650,9 @@
           }
 
           /**
-           * 过滤一组自主记忆：搜索命中 + 去掉已归档 / 已取代，并算出生效数。
-           * 卡片与「全局」卡里的内嵌分节共用这一份口径。
+           * 过滤一组自主记忆：搜索命中 + 拆出已归档 / 已取代，并算出生效数。
+           * 已归档单独回传（卡片底部那行「已归档」用它渲染恢复入口）；已取代是历史，
+           * 没有恢复语义，直接丢。
            */
           function evolutionGroupView(groups) {
             return (groups || []).map(function (g) {
@@ -1625,9 +1664,10 @@
                   return hay.toLowerCase().indexOf(q) >= 0
                 })
               }
-              // 已取代是历史，已归档在回收站，都不占列表。
+              // 已归档不进生效列表，但也不是垃圾：放在底部折叠区里，能一键恢复。
               var live = rows.filter(function (e) { return e.status !== 'archived' && e.status !== 'superseded' })
-              return { key: g.key, label: g.label, live: live, on: evolutionOnCount(live) }
+              var archived = rows.filter(function (e) { return e.status === 'archived' })
+              return { key: g.key, label: g.label, live: live, on: evolutionOnCount(live), archived: archived }
             })
           }
 
@@ -1642,21 +1682,54 @@
           }
 
           /**
+           * 已归档行：只留名称、正文摘要与「恢复」。
+           *
+           * 归档的条目不再注入，行内开关没有意义；要删就直接从列表里恢复后删，
+           * 或去回收站 —— 这里只给一条最常用的出路。
+           */
+          function renderArchivedRow(e) {
+            var title = evolutionNameOf(e)
+            var body = String(e.oneLine || '').trim()
+            return React.createElement(ListRow, {
+              key: 'arch:' + e.id,
+              dots: [React.createElement(StatusDot, { key: 'd', tone: 'idle', title: t('evo.tag.archived') })],
+              name: title,
+              meta: body !== '' && body !== title
+                ? [React.createElement('span', { key: 'body', className: 'dsm-listrow-meta-desc', title: body }, body)]
+                : undefined,
+              side: React.createElement('button', {
+                type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoBusy,
+                title: t('evo.archived.restoreTip'),
+                onClick: function () { restoreEvolution(e.id) },
+              }, t('evo.archived.restore')),
+            })
+          }
+
+          /**
            * 工作区自主记忆卡。`groups` 是这张卡要展示的工作区分组，组间画分节线。
            * `cardKey` 同时是折叠状态的键。
            *
            * 复用场景卡的骨架（.dsm-source），行沿用 renderEvolutionRow（ListRow）：
            * 名称 + 正文，候选行右侧有「确认」，生效行右侧是开关（关闭只停止注入，删除才进回收站）。
            * 卡头右侧的「设置」开设置弹窗（两层开关 / 风格 / 整理），卡片本身只管展示与逐条操作。
+           *
+           * 已归档的条目收在卡片底部一行折叠里：它们不在生效清单里，但用户否决错了要能
+           * 就地找回 —— 回收站里没有它们（归档不删文件）。
            */
           function renderEvolutionCard(opts) {
             var layerOn = opts.layerOn
             var groups = evolutionGroupView(opts.groups)
             var total = 0
             var onCount = 0
-            groups.forEach(function (g) { total += g.live.length; onCount += g.on })
-            // 一条都没有 → 不渲染：空卡 / 空提示只占空间，开关状态在页头按钮与设置弹窗里。
-            if (total === 0) return null
+            var archivedRows = []
+            groups.forEach(function (g) {
+              total += g.live.length
+              onCount += g.on
+              archivedRows = archivedRows.concat(g.archived)
+            })
+            // 生效的一条都没有、归档也没有 → 不渲染：空卡只占空间。
+            // 只有归档时必须画：否则刚否决最后一条，卡片连同恢复入口一起消失。
+            if (total === 0 && archivedRows.length === 0) return null
             // 默认展开跟总开关走（开 = 这里就是它注入的清单，该一眼能看）；手动收起的以手动为准。
             var openFlag = collapsed[opts.cardKey]
             var baseOpen = openFlag === undefined ? layerOn : openFlag !== true
@@ -1667,6 +1740,18 @@
               body.push(renderEvolutionDivider('h:' + g.key, g.label, g.on, g.live.length))
               body = body.concat(g.live.map(function (e) { return renderEvolutionRow(e) }))
             })
+            if (archivedRows.length > 0) {
+              var archivedKey = opts.cardKey + ':archived'
+              var archivedOpen = collapsed[archivedKey] === true
+              body.push(React.createElement('div', { key: archivedKey, className: 'dsm-evo-archived' },
+                React.createElement('button', {
+                  type: 'button', className: 'dsm-evo-review-toggle', 'aria-expanded': archivedOpen,
+                  onClick: function () { toggleCollapse(archivedKey, !archivedOpen) },
+                }, t('evo.archived.toggle', { count: archivedRows.length })),
+                archivedOpen
+                  ? React.createElement('div', { className: 'dsm-evo-archived-list' }, archivedRows.map(renderArchivedRow))
+                  : null))
+            }
             // 总开关开 = 卡照常；关 = 整卡置灰（条目还在盘上，只是不再注入）。
             return React.createElement('div', { key: opts.cardKey, className: 'dsm-source' + (layerOn ? '' : ' dsm-rule-off') },
               React.createElement('div', { className: 'dsm-source-head' },
@@ -1740,7 +1825,8 @@
               }
             }
             if (group === '') {
-              setResult({ ok: false, error: t('memory.workspace.noCwd') })
+              // Notice 读的是 `text`（`error` 字段不会显示），用错键会让这次点击完全没反馈。
+              setResult({ ok: false, text: t('memory.workspace.noCwd') })
               return
             }
             setEditor(draftForCreate(group))
@@ -2260,7 +2346,7 @@
 
           function renderEvolutionModal() {
             var st = evo.status
-            var auto = (st && st.auto) || { entries: 0, active: 0, pendingReview: 0 }
+            var auto = (st && st.auto) || { entries: 0, active: 0, pending: 0 }
             var eff = (st && st.effective) || {}
             var overall = eff.enabled === true
             var globalOn = eff.learnGlobal === true
@@ -2277,7 +2363,7 @@
             var statText = t('evo.stat', {
               learned: auto.entries || 0,
               active: auto.active || 0,
-              pending: auto.pendingReview || 0,
+              pending: auto.pending || 0,
             })
             // 待复核与已归档只在非零时追加：它们是"需要你做什么"与"你已经收起了什么"，
             // 恒显示一个 0 只会让这行变长。这两个数服务端一直在给，界面此前从没读过。
@@ -2374,49 +2460,38 @@
           var evoGlobalOn = evoEff.learnGlobal === true
           var evoWorkspaceOn = evoEff.learnWorkspace === true
           var evoOn = evoGlobalOn || evoWorkspaceOn
-          var evoPending = Number(evo.status && evo.status.auto && evo.status.auto.pendingReview) || 0
-          // 页头「注入预算」的**已用**只有一个来源：服务端按注入侧口径算好的总占用。
+          var evoPending = Number(evo.status && evo.status.auto && evo.status.auto.pending) || 0
+          // 页头「记忆域预算」= 记忆域的已用 / 上限，唯一来源是服务端 `auto.injectBytes`
+          // （`{ bytes, maxBytes, breakdown, degraded? }`）。`bytes` 是这一轮真正进上下文的
+          // 记忆正文：全局 + 工作区 + 跟着场景消息走的场景记忆，三块共用一个总盘。界面别再
+          // 按各层自己加，否则会把标题与收尾语重复记一遍。
           //
-          // 那个数包含四块（场景段 + 工作区记忆 + 全局自主 + 工作区自主），而界面手里
-          // 的 `memInfo.usedBytes` 只含场景段 —— 自己相加会漏掉工作区记忆，于是显示
-          // "还剩 100 KiB"而实际早已超限。
-          //
-          // 服务端没给（老版本 / 单测）时才退回本地累加：那个算法会高估，但不会漏报。
-          var serverUsed = evo.status && evo.status.auto && evo.status.auto.injectBytes
-          var hasServerUsed = typeof serverUsed === 'number' && isFinite(serverUsed)
-          var evoBytes = (function () {
-            if (hasServerUsed) return Math.max(0, serverUsed)
-            var hash = String((evo.status && evo.status.workspace && evo.status.workspace.hash) || '')
-            var total = memUsed
-            ;(evo.entries || []).forEach(function (e) {
-              if (e.injects !== true) return
-              if (e.layer === 'global') { if (evoGlobalOn) total += Number(e.bytes) || 0; return }
-              if (e.layer === 'workspace') { if (evoWorkspaceOn && hash !== '' && String(e.workspace || '') === hash) total += Number(e.bytes) || 0 }
-            })
-            return total
-          })()
+          // 缺字段（老版本 / 单测）或 `degraded` 非空时显示「未知 / 降级」：拿 0 顶会被读成
+          // "记忆不占字节"，超限也不会转红，比留白更糟。
+          var injectBytes = evo.status && evo.status.auto && evo.status.auto.injectBytes
+          var hasInjectBytes = !!injectBytes && typeof injectBytes === 'object'
+            && typeof injectBytes.bytes === 'number' && isFinite(injectBytes.bytes)
+          var budgetDegradedText = injectBytes && typeof injectBytes.degraded === 'string' ? injectBytes.degraded : ''
+          var budgetUnknown = !hasInjectBytes
+          var budgetDegraded = hasInjectBytes && budgetDegradedText !== ''
+          var evoBytes = hasInjectBytes ? Math.max(0, injectBytes.bytes) : 0
+          var budgetMax = hasInjectBytes && typeof injectBytes.maxBytes === 'number' && isFinite(injectBytes.maxBytes)
+            ? Math.max(0, injectBytes.maxBytes) : 0
           // 超限判据与显示用同一个数：两处各算一套时，会出现"红了但数字没超"。
-          var budgetOver = memMax > 0 && evoBytes > memMax
+          var budgetOver = !budgetUnknown && !budgetDegraded && budgetMax > 0 && evoBytes > budgetMax
+          var budgetValue = budgetUnknown ? t('memory.budget.unknown')
+            : budgetDegraded ? t('memory.budget.degraded')
+              : t('memory.budget.bytes', { used: evoBytes, max: budgetMax })
           var evoConflicts = Number(evo.status && evo.status.auto && evo.status.auto.conflicts) || 0
           // 工作区自主记忆卡：所有工作区合成一张，卡内按名称分节。场景筛选选了具体场景时
           // 跟着隐藏 —— 自主记忆不绑场景，出现在"某场景里有什么"的答案里只会添乱。
           var evoCards = renderEvolutionCards()
-          // 全局自主记忆嵌在「全局」卡里：搜索只命中自主记忆时，用户记忆一条都没命中的
-          // 全局卡也必须出现，否则那节内容跟着卡一起消失。
-          var autoGlobalGroups = evolutionGroupView([{
-            key: 'global',
-            label: '',
-            rows: (evo.entries || []).filter(function (e) { return e.layer === 'global' }),
-          }])
-          var autoGlobalVisible = sceneFilter === '' && (evoGlobalOn || autoGlobalGroups[0].live.length > 0)
           var cardBuckets = visibleBuckets
-          if (autoGlobalVisible && cardBuckets.indexOf('global') < 0) cardBuckets = ['global'].concat(cardBuckets)
-          // 顺序（用户 2026-11-10）：全局（含全局自主记忆）→ 工作区自主记忆 → 其余场景卡。
-          // 没有全局卡时工作区卡排最前；它不绑场景，不该被挤到页面末尾。
           // 页面顺序（用户定的四类记忆，从上到下）：
           //   全局记忆 → 自主记忆 → 工作区记忆 → 场景记忆（每场景一张）。
-          // 全局卡内部还嵌着自主·全局那一节 —— 它与全局记忆是同一层的东西，分开成卡读起来
-          // 像两套配置；自主卡只放工作区自主那半。
+          // 全局自主记忆与工作区自主记忆都在上面那张自主卡里（见 renderEvolutionCards），
+          // 不往全局卡里塞，也不再为了让"只命中自主记忆"的全局卡出现而强插 key ——
+          // 那会把一张空的用户记忆卡拉出来。
           var sceneCards = cardBuckets.map(renderSceneCard)
           var wsCard = renderWorkspaceCard()
           var globalIndex = cardBuckets.indexOf('global')
@@ -2440,9 +2515,9 @@
                 [(stats.enabled || 0) + '/' + (stats.total || 0), t('memory.stat.total')],
                 [(stats.scenes || 0) + '/' + (data.scenes || []).length, t('memory.stat.sceneCount')],
                 // 注入预算本来就是"已用/上限"，与上面两格同形；超限整格转错误色。
-                // 已用直接用 `evoBytes`：服务端给值时它已经是**四块合计**（场景段 + 工作区
-                // 记忆 + 两层自主），再叠加 `memUsed` 会把场景段算两遍。
-                [memMax > 0 ? t('memory.budget.bytes', { used: evoBytes, max: memMax }) : '—',
+                // 已用只取服务端的 `injectBytes.bytes`（记忆域），不叠加任何本地累加 ——
+                // 见上面预算那段注释。取不到时值是「未知 / 降级」，不是 0。
+                [budgetValue,
                   budgetOver ? t('memory.budget.label') + ' · ' + t('memory.budget.over') : t('memory.budget.label'),
                   budgetOver ? 'dsm-stat-over' : ''],
                 // 冲突格**只在真有时才出现**：恒显示一个 0 的统计比不显示更糟 —— 用户会
@@ -2488,6 +2563,9 @@
               React.createElement('div', { className: 'dsm-source-filter' },
                 React.createElement(SourceSelect, { options: sceneOptions, value: sceneFilter, onChange: setSceneFilter }))),
             memInfo.truncated ? React.createElement('p', { className: 'dsm-help' }, t('memory.budget.truncated')) : null,
+            // 降级原因原样渲染（服务端给的实况串，不进 DICT）：预算数字这时不可信，
+            // 用户需要知道是哪个文件读坏了。
+            budgetDegraded ? React.createElement('p', { className: 'dsm-help' }, t('memory.budget.degradedTip', { reason: budgetDegradedText })) : null,
             droppedNames.length ? React.createElement('p', { className: 'dsm-help' }, t('memory.budget.dropped', { names: droppedNames.join('、') })) : null,
             // 成功 / 失败统一走 Notice（成功浮层 2.6 秒自动消失，见上方 result 清理 effect；
             // 错误留在文档流里不自动消失——错误需要一直看得见）。

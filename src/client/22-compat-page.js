@@ -1426,44 +1426,39 @@
             React.createElement('div', { key: 'domains-head', className: 'dsm-seg-group' },
               React.createElement('span', null, t('compat.inject.domains')),
               React.createElement('span', { className: 'dsm-seg-group-line' })),
-            // 多域**一行**（用户 2026-10-12：「分六行很占用空间，能不能一行显示，而且还能美观、
-            // 简洁、高级」）：每颗 chip 等分排开，开 = 成功色描边 + 实心点、关 = 默认描边 + 灰点。
-            // 不再用一排 32px 开关 —— 名字与开关并排要 ~105px，六份就是 630px，一行放不下还得
-            // 靠缩小字号硬塞；chip 把「名字」本身变成控件，窄栏按 flex-basis 折行也不会挤成一团。
+            // 多域**挤在一块**（用户 2026-10-12：「分六行很占用空间，能不能一行显示，而且还能美观、
+            // 简洁、高级」）：每颗 chip 等宽排开，开 = 成功色描边 + 实心点、关 = 默认描边 + 灰点。
+            // 不用一排 32px 开关 —— 名字与开关并排要 ~105px，七份就是 700px；chip 把「名字」本身
+            // 变成控件，列宽由 CSS 的 auto-fit 决定，窄栏折成两三行而不是缩小字号硬塞。
             // a11y：role=switch + aria-checked 挂在 chip 上（它就是一个开关，只是长成了标签的样子），
             // 键盘可聚焦、Enter/Space 由 button 语义自带。
             React.createElement('div', { key: 'domains', className: 'dsm-inject-domains' },
-              // 两块记忆在界面上只占一个「记忆」开关：工作区笔记不是用户要单独管的东西，
-              // 自主记忆的学习 / 注入层开关在记忆页签。这里只管"记忆这一域注不注入"，
-              // 点一下同时写 memoryGlobal / memoryWorkspace 两个内部域。
-              ['scene', 'memoryGlobal', 'mcp', 'skills', 'subagents', 'prompt'].map(function (key) {
+              // 域名与顺序都取响应里的 `domains`：服务端已按注入域清单规范化成完整的七个键，
+              // 界面再写一份字面量就会在加域 / 调序时与注入通道对不上。
+              //
+              // 两块记忆各有自己的开关：全局记忆与当前工作区记忆是两份文件，用户在"这个仓库里
+              // 不注入记忆、全局的仍要"时必须能分开关；合成一颗只能同开同关。
+              Object.keys(domains).map(function (key) {
                 // 技能与提示词两域在标准类预设下由宿主送、本插件让位 —— 关掉它们时本插件会连
                 // 宿主那条一起拦下（见 context-inject.ts 的 officialKindsToSuppress）。这里给
                 // 那两项一句 title，免得用户以为"关了没用"。
                 const carrier = key === 'skills' || key === 'prompt'
-                const memoryPair = key === 'memoryGlobal'
-                const on = memoryPair
-                  ? domains.memoryGlobal !== false && domains.memoryWorkspace !== false
-                  : domains[key] !== false
+                const on = domains[key] !== false
+                // 有专属说明的域（两块记忆）用自己的 title，其余回落到通用的 carrier 说明。
+                const tipKey = 'compat.inject.domain.' + key + '.title'
+                const tip = t(tipKey)
+                const title = tip !== tipKey ? tip : carrier ? t('compat.inject.domain.carrier.title') : undefined
                 return React.createElement('button', {
                   key: 'domain-' + key,
                   type: 'button',
                   role: 'switch',
                   'aria-checked': on,
                   className: 'dsm-inject-chip' + (on ? ' dsm-inject-chip-on' : ''),
-                  title: memoryPair
-                    ? t('compat.inject.domain.memory.title')
-                    : carrier ? t('compat.inject.domain.carrier.title') : undefined,
+                  title: title,
                   'aria-label': t('compat.inject.domain.' + key),
                   onClick: function () {
                     const nextDomains = Object.assign({}, domains)
-                    if (memoryPair) {
-                      const next = !on
-                      nextDomains.memoryGlobal = next
-                      nextDomains.memoryWorkspace = next
-                    } else {
-                      nextDomains[key] = domains[key] === false
-                    }
+                    nextDomains[key] = !on
                     saveInject({ domains: nextDomains })
                   },
                 },
@@ -1566,9 +1561,9 @@
           return t('compat.inject.domain.' + key)
         }
         const toolTableDisabled = toolTableBusy || scopeSessionLocked || toolTable.state === 'unknown'
-        // 自主记忆那条工具没有独立开关：面板画成「只读行」—— 名字与介绍照常显示，
-        // 自主记忆那条工具不在这份报表里（服务端已把它从分组与计数中摘掉）：
-        // 它的可见性只跟记忆页的两个开关走，这里没有它的行。
+        // 自主记忆那条工具没有独立开关：它的可见性只跟记忆页的两个开关走，
+        // 因此不在这份报表的分组里（服务端已把它从分组与计数中摘掉），界面上没有它的勾选行。
+        // 它到底下发没下发、以及"实际一共几个工具"，由下面那一行补上。
         const rows = []
         groups.forEach(function (group) {
           const tools = group.tools
@@ -1651,6 +1646,13 @@
                   title: presetCount ? t('compat.tools.preset.apply.tip') : t('compat.tools.preset.apply.tipEmpty'),
                   onClick: function () { setToolPreset({ mode: 'apply' }) },
                 }, t('compat.tools.preset.apply')))),
+            // 表里能勾的只有手动清单里的工具；正文里还固定搭着一份跟随记忆页总开关的
+            // 记忆工具，它没有勾选框、不占一行。这里把它「现在开没开」和"实际一共下发几个"
+            // 写清楚 —— 否则合计行的数字与模型真正看到的工具数会差一个。
+            report.derived ? React.createElement('div', { key: 'derived', className: 'dsm-tooltable-derived' },
+              t('compat.tools.derived', { state: t(report.derived.active ? 'compat.tools.derived.on' : 'compat.tools.derived.off') }),
+              ' · ',
+              t('compat.tools.sent', { count: report.sentCount })) : null,
             // 这一张表归属哪一层 / 为什么勾不动（锁）。读不到时这一节本来就不渲染。
             scopeLine ? React.createElement('div', { className: 'dsm-tooltable-scope' }, scopeLine) : null,
             scopeSessionLocked
@@ -2335,7 +2337,7 @@
 
       // ── 整机迁移（0.15.0 C2）──────────────────────────────────────────────────
       // 导出 = 一个目录带走全部；导入 = 先读清单预览、勾选域、选冲突策略，再执行。
-      // 两步是硬要求：一次写六个域的失败面太大，用户必须先看到"哪域有多少、几个重名"。
+      // 两步是硬要求：一次写多个域的失败面太大，用户必须先看到"哪域有多少、几个重名"。
       /** 内联的目录浏览面板（挂在对应输入框下面，不再套一层弹窗）。 */
       const snapBrowsePanel = function (target) {
         if (!browse || browse.target !== target) return null

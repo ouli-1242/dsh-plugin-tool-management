@@ -386,8 +386,8 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
           })
         }
         // 用户配置层：注入域 / 令牌 / 场景锁定 / 停用工具数。
-        // 分母必须取自 INJECT_DOMAIN_KEYS：场景与记忆分家后域从 5 个变 6 个，
-        // 写死的「/5」把 6/6 报成 6/5（用户实测）。
+        // 分母必须取自 INJECT_DOMAIN_KEYS：记忆拆成全局 / 工作区两个独立域后共 7 个，
+        // 写死的「/6」会把 7/7 报成 7/6。
         const domainTotal = INJECT_DOMAIN_KEYS.length
         push({
           key: 'injection-domains', label: '注入域开关', tab: 'compat',
