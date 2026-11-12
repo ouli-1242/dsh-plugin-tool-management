@@ -188,7 +188,7 @@ export const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
     //   - 与①的区别（那条授权语不能回来）：这里不授权"照办"，只说"你拿到的这些东西为什么长这样"。
     //     用户自己写的说明仍然只是注解，不是约定。
     //   - 为什么这句能过"不写机制"那条原则：它解释的不是宿主怎么算的，而是**模型眼前这份上下文
-    //     为什么缺了几样**（`## Scene: 编程` 分组、看不到别的场景的记忆、工具比别处少）。
+    //     为什么缺了几样**（`## Scene Memories: 编程` 分组、看不到别的场景的记忆、工具比别处少）。
     //     这是它做判断时要用的事实，不是反推。
     //   - 代价 ≈24 tok/轮，只在这一域。
     title: 'Current scene',
@@ -415,6 +415,13 @@ export const FRAME_CLOSE = '</system-reminder>'
  * 提前结束，其后的内容读起来像用户当场说的话。照抄官方 `escapeInstructionFrameBody` 的实现
  * （`dsh-agent-instructions/lib/index.js:128`，同样是替换成带反斜杠的形态 —— 模型看到的
  * 字面量不变，标记不再闭合）。
+ *
+ * **只转义闭合标记是有意的，不要"顺手"把开标记也转义掉**：
+ *   - 只有闭合能让人逃出框架，开标记不能 —— 正文里写 `<system-reminder>` 只会留下一个
+ *     嵌套的伪开标记，全部内容仍在同一个框架内，来源判定不变（整块本来就是 system 上下文，
+ *     再"声明"一次不会提权）。
+ *   - 转义开标记要改动模型看到的字面量（`&lt;` 或加反斜杠），而官方那两条注入行不这么做；
+ *     与官方形态分叉会让"这段是不是系统给的"这条判据在两边长得不一样。
  */
 export function escapeFrameBody(body: string): string {
   return body.replaceAll(FRAME_CLOSE, '<\\/system-reminder>')
@@ -485,7 +492,7 @@ export function renderDomainText(
   const frameKey = frameKeyOf(frame) + (scopeLine === undefined ? '' : '\u0001' + scopeLine)
   // 层级（用户看到实际注入后指出「记忆内的场景怎么都是 ## 标题」）：**`#` 一级给板块**
   // （场景 / 记忆 / MCP / 技能 / 子智能体 / 提示词），域正文里的 `##` 才是它的下一层
-  // （记忆段的 `## Scene: X`、超预算时的 `## Not injected (…)`）。此前标题也是 `##`，两者平级，
+  // （记忆段的 `## Scene Memories: X`、超预算时的 `## Not injected (…)`）。此前标题也是 `##`，两者平级，
   // 模型读不出主次 —— 而"哪些内容归在哪个板块/场景下"正是它做判断时要用的结构。
   //
   // 开标签后**必须空一行**：markdown 里 `#` 紧跟在一行文字后面只是**段落续行**，不会被渲染成

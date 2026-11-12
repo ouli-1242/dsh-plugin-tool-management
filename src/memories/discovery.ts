@@ -10,7 +10,7 @@ import { readdirSync, statSync } from 'node:fs'
 import { cp, lstat, mkdir, readFile, readdir, realpath, rename, rm } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { parseSkillDoc, resolveDshHome, unquote } from '../skills/core.js'
-import { MAX_SOURCE_DEPTH, MAX_DIRECTORIES, MAX_ENTRIES, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, TRUNCATION_MARKER, DROPPED_HEADING, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, SHARED_GROUP, byteLen, message, isValidGroupSegment } from './constants.js'
+import { MAX_SOURCE_DEPTH, MAX_DIRECTORIES, MAX_ENTRIES, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, TRUNCATION_MARKER, DROPPED_HEADING, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, SHARED_GROUP, isReservedGroup, byteLen, message, isValidGroupSegment } from './constants.js'
 import { ensureSceneRecords, resolveActiveScenes, signatureOfIndex, sceneLabel, sceneHeading, sceneLine, compareSceneBuckets, memoryBlock } from './projection.js'
 import { isIndexQuarantined, readIndex, writeIndex, pathExists, readFileOrThrowSync, isAbsentError } from './index-io.js'
 import type { RuleIndexEntry } from './index-io.js'
@@ -161,7 +161,9 @@ export async function discover(memoriesRoot: string): Promise<DiscoveryResult> {
     if (current.group !== '') {
       groups.add(current.group)
       // 一级目录 = 场景名（多段场景名用 '/' 连接，见 isValidGroupPath）。
-      if (current.depth === 1) scenes.push(current.group)
+      // 保留组（`_ws` / `_session` / `_auto` / `_shared`）不是场景：它们由各自的层规则处理，
+      // 进了这份清单就会出现在场景选择器里，用户点进去看到一堆按 hash 命名的目录。
+      if (current.depth === 1 && !isReservedGroup(current.group)) scenes.push(current.group)
     }
 
     dirents.sort((a, b) => a.name.localeCompare(b.name))
@@ -217,7 +219,6 @@ export interface DerivedFields {
   autoKind?: string
   autoKey?: string
   autoStatus?: string
-  autoConfidence?: number
   autoWorkspace?: string
   autoScene?: string
   /** 「什么时候可能不成立」；注入行末尾会带上它，见 `CatalogEntry.boundary`。 */
@@ -257,7 +258,6 @@ export function deriveFromDoc(entry: DiscoveredEntry, doc: ParsedSkillDoc): Deri
   const autoKind = scalarOf(doc.map.auto_kind)
   const autoKey = scalarOf(doc.map.auto_key)
   const autoStatus = scalarOf(doc.map.auto_status)
-  const autoConfidence = numberOf(doc.map.auto_confidence)
   const autoWorkspace = scalarOf(doc.map.auto_workspace)
   const autoScene = scalarOf(doc.map.auto_scene)
   const autoBoundary = scalarOf(doc.map.auto_boundary)
@@ -269,7 +269,6 @@ export function deriveFromDoc(entry: DiscoveredEntry, doc: ParsedSkillDoc): Deri
     ...(autoKind !== undefined ? { autoKind } : {}),
     ...(autoKey !== undefined ? { autoKey } : {}),
     ...(autoStatus !== undefined ? { autoStatus } : {}),
-    ...(autoConfidence !== undefined ? { autoConfidence } : {}),
     ...(autoWorkspace !== undefined ? { autoWorkspace } : {}),
     ...(autoScene !== undefined ? { autoScene } : {}),
     ...(autoBoundary !== undefined ? { autoBoundary } : {}),
@@ -311,7 +310,6 @@ export function projectRule(entry: DiscoveredEntry, derived: DerivedFields, idxE
     ...(derived.autoKind !== undefined ? { autoKind: derived.autoKind } : {}),
     ...(derived.autoKey !== undefined ? { autoKey: derived.autoKey } : {}),
     ...(derived.autoStatus !== undefined ? { autoStatus: derived.autoStatus } : {}),
-    ...(derived.autoConfidence !== undefined ? { autoConfidence: derived.autoConfidence } : {}),
     ...(derived.autoWorkspace !== undefined ? { autoWorkspace: derived.autoWorkspace } : {}),
     ...(derived.autoScene !== undefined ? { autoScene: derived.autoScene } : {}),
     ...(derived.autoBoundary !== undefined ? { autoBoundary: derived.autoBoundary } : {}),

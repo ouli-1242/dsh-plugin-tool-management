@@ -76,7 +76,7 @@ export function resolveActiveScenes(
   override?: string | null,
 ): { active: Set<string>; mode: 'all' | 'custom' } {
   // 保留组不是场景：`_ws` / `_session` / `_auto` / `_shared` 由各自的层规则处理，
-  // 不能进"当前启用场景"集合 —— 否则它们会以 `## Scene: _ws` 的形式注入。
+  // 不能进"当前启用场景"集合 —— 否则它们会以 `## Scene Memories: _ws` 的形式注入。
   const scenes = knownScenes.filter((n) => !isReservedGroup(n))
   if (override === null) {
     return { active: new Set<string>([SHARED_GROUP, GLOBAL_SCENE]), mode: 'custom' }
@@ -173,15 +173,19 @@ export function sceneLabel(scene: string, index?: RulesIndex): string {
 /**
  * 记忆段里的场景**分组**标题。
  *
- * `global` 是恒常生效的保留桶，不是"一个场景" —— 叫它 `## Scene: 全局` 会让模型以为"全局"
+ * `global` 是恒常生效的保留桶，不是"一个场景" —— 叫它 `## Scene Memories: 全局` 会让模型以为"全局"
  * 是当前场景的另一种取值（用户 ：「全局不需要写成场景」）。所以它单独成一种标题：
- * `## Always-on memories`。其余场景仍是 `## Scene: X`。
+ * `## Always-on memories`。其余场景是 `## Scene Memories: X`。
  *
- * `_shared`（历史保留名）保持 `## Scene: _shared` 不动 —— 它只在旧数据里出现，且没有
+ * 标题写 `Scene Memories` 而不是 `Scene`：这一块装的是**记忆条目**，而「场景」本身（说明行
+ * `**「写作」**`）由场景段单独给。只写 `Scene: 写作` 会让模型把它读成"场景的定义"，
+ * 而不是"这个场景下记了哪些条目"。
+ *
+ * `_shared`（历史保留名）保持原样不动 —— 它只在旧数据里出现，且没有
  * "全局"这种"它不是场景"的语义歧义（它确实曾是一个共享场景）。
  */
 export const sceneHeading = (scene: string): string =>
-  scene === GLOBAL_SCENE ? '## Always-on memories' : `## Scene: ${sceneLabel(scene)}`
+  scene === GLOBAL_SCENE ? '## Always-on memories' : `## Scene Memories: ${sceneLabel(scene)}`
 
 /**
  * 把一段条目并进正文里某个 `##` 组的末尾。
@@ -214,7 +218,7 @@ export function appendToSceneGroup(body: string, heading: string, extra: string)
  *
  * 用户看到**实际注入**之后提的：
  *   - **场景名只出现一次**。框架线索"现在处在哪个场景"、引导语里的「代码」、标题里的
- *     `## Scene: 代码` 三处都写一遍，等于把同一件事换个标签说三次；说明行只是注解，不重复它。
+ *     `## Scene Memories: 代码` 三处都写一遍，等于把同一件事换个标签说三次；说明行只是注解，不重复它。
  *   - **场景说明是「标签」，不是「约定」**。它答的是"这个场景是干什么的"，用户的实例就是
  *     「写代码」「前端相关」。把它写成"一律照办、覆盖你的默认做法"，等于要求模型
  *     "照办一个标签" —— 那正是它读不懂这一段的根源。说明只作注解跟在名字后面，不带授权。
@@ -322,7 +326,7 @@ export function attachmentLine(file: SceneMemoryFile): string {
  * `indentBody` 的缩进段落。
  *
  * 为什么围栏仍然保留：markdown 里缩进 ≤3 格的 `#` **仍然算标题**，所以正文里一句手写的
- * `# 代码/需求` 会渲染成 H1，**盖过容器自己的 `## Scene: X`** —— 用户看到的就是这个：
+ * `# 代码/需求` 会渲染成 H1，**盖过容器自己的 `## Scene Memories: X`** —— 用户看到的就是这个：
  * 内容看起来"逃出了条目"，与场景标题平级甚至更高。缩到 4 格能压住标题（块级标记都要求
  * ≤3 格缩进），但正文里的列表/引用只是被"压平"，视觉上仍与条目正文同级，达不到"明显从属"。
  *
@@ -354,7 +358,7 @@ const indentBody = (text: string): string =>
  * 这行正文在缩进 2 格后，会不会**逃出条目**变成块级结构。
  *
  * markdown 的块级标记允许 ≤3 格缩进，所以正文里一句手写的 `# 标题` 会盖过容器的
- * `## Scene: X`；围栏与 HTML 块同理，还会把后面的行一起吞进去。命中这些的行必须进
+ * `## Scene Memories: X`；围栏与 HTML 块同理，还会把后面的行一起吞进去。命中这些的行必须进
  * 围栏代码块（`bodyBlock`），其余多行正文按普通段落渲染。
  *
  * 不列列表标记（`- ` / `1. `）：缩进后只是条目下的嵌套列表，归属不变。
@@ -384,7 +388,7 @@ export function escapesItem(text: string): boolean {
  * 为什么要分两种：用户常有十几条「一句话事实」（「提交格式：PDF」），每条都占标题 + 空行 +
  * 正文三行，整段会散成一长串标题；压成一行后十条信息就是十行。多行正文是**用户写的完整
  * Markdown**（可能自带标题、代码块、嵌套列表），放进围栏块挂到条目下 —— 让它以普通段落
- * 参与外围排版，正文里的 `#` 就会盖过 `## Scene: X`（见 `bodyBlock` 的说明）。
+ * 参与外围排版，正文里的 `#` 就会盖过 `## Scene Memories: X`（见 `bodyBlock` 的说明）。
  *
  * 返回值带 `inline`：调用方据此决定下一条记忆前要不要空行（单行条目连续排列，其余空行分隔）。
  */

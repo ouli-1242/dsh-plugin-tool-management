@@ -15,6 +15,8 @@ import type { Learner } from '../evolution/write.js'
 import type { ColdPathHandle } from '../evolution/cold.js'
 import type { SweepReport } from '../evolution/maintenance.js'
 import { isInjectableStatus } from '../memories/catalog.js'
+import { tierOf } from '../evolution/state.js'
+import { AUTO_KINDS } from '../evolution/gates.js'
 import { workspaceCwdOfScopeKey, workspaceMemoryKeyOf } from '../scope/workspace-key.js'
 
 /**
@@ -58,6 +60,15 @@ export interface EvolutionOpDeps {
    */
   workspaceKeysOfHashes?(hashes: string[]): Promise<Record<string, string>>
   /**
+   * 宿主当前可用的模型清单（`provider` + `id` + `name`）。
+   *
+   * 界面的「复习模型」做成下拉框用：让用户从**真实存在**的模型里挑，而不是手打一个
+   * provider/model 字符串 —— 打错了不会报错，只会在后台复习时静默失败，用户看不出原因。
+   *
+   * 宿主不提供 `llm` 服务时返回空数组，界面退回手填输入框（降级方向是「还能用」）。
+   */
+  modelsOf?(): Promise<Array<{ provider: string; id: string; name: string }>>
+  /**
    * 冷路径句柄（后台复习队列）。
    *
    * 用 getter 而不是直接传实例：op 表在 `attachColdPath` **之前**装配（op 要能被
@@ -72,7 +83,8 @@ export interface EvolutionOpDeps {
     byLayer: Record<string, { active: number; candidate: number; archived: number; tokens: number }>
     tokens: number
     conflicts: number
-    needsReview: number
+    pendingReview: number
+    reviewDue: number
     expired: number
     total: number
   }>
@@ -82,6 +94,24 @@ export interface EvolutionOpDeps {
    * 可选：单测里不接也能跑；回调自己抛错不该让开关保存失败。
    */
   onSettingsChanged?(): void
+  /**
+   * 页头「注入预算」里自主记忆那部分的**真实字节数**。
+   *
+   * 必须由装配层提供（它才知道手写记忆占了多少、当前笔记风格、启用场景），
+   * 而且必须走注入侧同一份渲染（`renderAutoLayer`）—— 界面自己按条目累加会漏掉
+   * 「按渲染块实际字节记账」与「预算装不下就整条让位」两道闸，得出一个比实际大的数，
+   * 于是页头报"已超限"而模型那边其实还有余量。
+   *
+   * 可选：单测里不接就报 0（界面退回本地累加）。
+   */
+  injectBytesOf?(scopeKey: string | undefined, sessionId: string): Promise<number>
+  /**
+   * 同 slot 下同时生效的条目数（>1 就是两条矛盾说法同时在注入）。
+   *
+   * 与维护扫描的 `healthOf().conflicts` 同一份判据；这里单独给一个轻量入口，
+   * 免得记忆页为了一个数字去跑整轮健康度统计。
+   */
+  conflictsOf?(): Promise<number>
   message(e: unknown): string
 }
 
@@ -89,6 +119,7 @@ export interface EvolutionOpDeps {
 function layerView(overrides: EvolutionOverrides | undefined) {
   return { defined: overrides !== undefined && Object.keys(overrides).length > 0, values: overrides ?? {} }
 }
+
 
 export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: any) => Promise<any>> {
   const { config, runtime, learner, message } = deps
@@ -121,6 +152,20 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
      * `cwd` / `sessionId` 由调用方给：HTTP 层拿不到宿主 agent。工具层从 agent 取，
      * 但**层永远以真实 sid / 真实 cwd 为准**，不接受客户端伪造的"层归属"。
      */
+    /**
+     * 读：可用模型清单（「复习模型」下拉框的选项）。
+     *
+     * 只读、无副作用。空数组 = 宿主没接 `llm` 服务或它一个模型都没注册 —— 界面据此
+     * 退回手填输入框，而不是显示一个空下拉让用户以为坏了。
+     */
+    'evolution-models': async () => {
+      try {
+        const models = deps.modelsOf === undefined ? [] : await deps.modelsOf()
+        return { ok: true, models }
+      } catch (e: any) {
+        return { ok: false, error: String(e?.message || e), models: [] }
+      }
+    },
     'evolution-status': async (args: any) => {
       try {
         const { scopeKey, cwd, hash } = await workspaceOf(args)
@@ -135,15 +180,15 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         // 自动记忆实况：只报计数，不把正文塞进状态回执（它会被界面高频轮询）。
         const view = runtime.view()
         const entries = Object.values(view.catalog.entries)
-        const byLayer: Record<string, number> = { global: 0, workspace: 0, scene: 0, session: 0 }
-        const byStatus: Record<string, number> = {}
-        for (const e of entries) {
-          byLayer[e.layer] = (byLayer[e.layer] ?? 0) + 1
-          byStatus[e.status] = (byStatus[e.status] ?? 0) + 1
-        }
-        const needsReview = entries.filter((e) => {
+        // 两个数分开报：`pendingReview` 是「等你裁决」（不注入），`reviewDue` 是「该看一眼」
+        // （照常注入）。合成一个数字，用户会以为生效中的条目也在等他处理。
+        const pendingReview = entries.filter((e) => {
           const st = view.state.entries[e.id]
-          return st && typeof st.needsReview === 'string' && st.needsReview !== ''
+          return st && typeof st.pendingReason === 'string' && st.pendingReason !== ''
+        }).length
+        const reviewDue = entries.filter((e) => {
+          const st = view.state.entries[e.id]
+          return st && typeof st.reviewDue === 'string' && st.reviewDue !== ''
         }).length
         // 「待确认」必须与页面上**看得见的行**同口径：记忆页的工作区卡把所有工作区
         // 合成一张列出，所以这里也数全部候选。此前按「全局 + 本工作区」过滤，卡片上有
@@ -173,13 +218,30 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
           auto: {
             entries: retained,
             total: entries.length,
-            byLayer,
-            byStatus,
-            needsReview,
-            pendingReview: pending,
+            // `byLayer` / `byStatus` 不在这里返回：它们是维护扫描的诊断口径，而 `evolution-health`
+            // 已经给了完整一份。放在 status 里从来没有消费者 —— 一个没人读的字段比不存在更糟，
+            // 它会让下一个人以为界面上有这张图。
+            pendingReview,
+            reviewDue,
+            pending,
             archived,
             broken: view.broken,
             active: entries.filter((e) => e.enabled && isInjectableStatus(e.status)).length,
+            // 页头「注入预算」用的真实字节数。
+            //
+            // 界面自己按 `injects` + 层开关 + 当前工作区累加是**算不准**的：注入侧还要过
+            // 「按渲染块实际字节记账」与「预算装不下就整条让位」两道闸，实际进上下文的比那个和大。
+            // 两个数字对不上时，用户看到的"还剩 30 KiB"与模型看到的上下文会互相矛盾。
+            // 这里直接按注入侧同一份口径算一遍，界面只做展示。
+            // 没接这个回调（单测 / 老装配）时**不给这个字段**，而不是给 0：
+            // 0 会被界面当成"自主记忆不占字节"，于是页头报的用量偏小、超限也不转红。
+            // 缺字段时界面退回本地累加（会略高估，但不会漏报）。
+            ...(deps.injectBytesOf === undefined
+              ? {}
+              : { injectBytes: await deps.injectBytesOf(scopeKey, sessionId) }),
+            // 冲突数并进 status：界面只在记忆页显示这个数字，而记忆页不调 `evolution-health`
+            // （那是维护扫描的诊断入口）。放在这里，页头一格才有数据来源。
+            conflicts: await (deps.conflictsOf?.() ?? 0),
           },
         }
       } catch (e) {
@@ -190,10 +252,12 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
     /** 写全局设置。只接受已知字段，未传的沿用当前值。 */
     'evolution-settings': async (args: any) => {
       try {
-        const current = await config.readSettings()
-        if (args?.set !== true) return { ok: true, settings: current }
+        if (args?.set !== true) return { ok: true, settings: await config.readSettings() }
         const patch = args.settings && typeof args.settings === 'object' ? args.settings : {}
-        const next: EvolutionSettings = { ...current }
+        // **只收集这次真要改的字段**，不要以"我读到的当前值"为基线拼整份 —— 那是
+        // 拿 3 秒缓存去覆盖磁盘（两个窗口同时改不同字段时后写的赢，前一个的改动消失）。
+        // 合并由 `writeSettings` 在写锁内对新读到的磁盘值做。
+        const next: Partial<EvolutionSettings> = {}
         // 旧客户端只认识 `enabled`：按「两层同值」兼容，不让老界面把新字段写丢。
         if (typeof patch.learnGlobal === 'boolean') next.learnGlobal = patch.learnGlobal
         else if (typeof patch.enabled === 'boolean') next.learnGlobal = patch.enabled
@@ -212,9 +276,12 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         // 风格：预设、自定义档列表、选中的 id 可能分两次到，缺哪项就沿用当前值。
         // 选中的自定义档被删掉时，normalize 会退回默认档。
         if (patch.noteStyle !== undefined || patch.customNoteStyles !== undefined || patch.noteStyleText !== undefined) {
+          // 风格要**整组**算：选中的档被删掉时要退回默认档，只改其中一项会让组合不成立。
+          // 因此这里读一次当前值当基线 —— 但只把算出来的两项放进 patch，其余字段仍不碰。
+          const current = await config.readSettings()
           const style = normalizeNoteStyle({
-            style: patch.noteStyle !== undefined ? patch.noteStyle : next.noteStyle,
-            customStyles: patch.customNoteStyles !== undefined ? patch.customNoteStyles : next.customNoteStyles,
+            style: patch.noteStyle !== undefined ? patch.noteStyle : current.noteStyle,
+            customStyles: patch.customNoteStyles !== undefined ? patch.customNoteStyles : current.customNoteStyles,
             custom: patch.noteStyleText,
           })
           next.noteStyle = style.style
@@ -248,7 +315,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         if (scope === 'global') {
           if (inherit) return { ok: false, error: '全局这一档没有「继承」', code: 'bad-args' }
           // 旧的总开关语义保留：一次拨动两层同值。新界面用 `evolution-settings` 分别写。
-          const written = await config.writeSettings({ ...(await config.readSettings()), learnGlobal: enabled, learnWorkspace: enabled })
+          const written = await config.writeSettings({ learnGlobal: enabled, learnWorkspace: enabled })
           if (!written.ok) return { ok: false, error: written.error, code: 'write-failed' }
           runtime.invalidate()
           notifySettingsChanged()
@@ -288,11 +355,11 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
     },
 
     /**
-     * 学一条（模型主动调；也是 P2 复习器的唯一写入口）。
+     * 学一条（模型主动调；也是复习器的唯一写入口）。
      *
-     * `source` 的四个值决定证据强度：`user_explicit` 必须带**逐字引句**（证据门会核对），
-     * `user_correction` 尽力带、核不上时降级为推断，`tool_verified` 指"工具结果证明了它"，
-     * `model_inference` 只能进候选。
+     * **没有 `source` 参数**：证据来源由系统按 `quote` 的核对结果判定，不由调用方声明。
+     * 传了 `quote` 且逐字命中本会话的用户消息 → `user_explicit`；核不上 → 硬拒；
+     * 没传 → `model_inference`（进候选，等用户确认）。
      */
     /**
      * 只读预演：同一条 learn 请求如果被用户在卡片上批准，会落到哪一层、会不会合并 / 取代。
@@ -315,7 +382,6 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             ...(args?.title !== undefined ? { title: args.title } : {}),
             ...(args?.kind !== undefined ? { kind: args.kind } : {}),
             ...(args?.key !== undefined ? { key: args.key } : {}),
-            source: args?.source ?? 'model_inference',
             ...(args?.quote !== undefined ? { quote: args.quote } : {}),
             ...(args?.layer !== undefined ? { layer: args.layer } : {}),
             ...(args?.boundary !== undefined ? { boundary: args.boundary } : {}),
@@ -350,7 +416,6 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             ...(args?.title !== undefined ? { title: args.title } : {}),
             ...(args?.kind !== undefined ? { kind: args.kind } : {}),
             ...(args?.key !== undefined ? { key: args.key } : {}),
-            source: args?.source ?? 'model_inference',
             ...(args?.quote !== undefined ? { quote: args.quote } : {}),
             ...(args?.layer !== undefined ? { layer: args.layer } : {}),
             ...(args?.boundary !== undefined ? { boundary: args.boundary } : {}),
@@ -480,8 +545,22 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         // 两个入参名都收：界面按开关语义传 `enabled`，工具按状态语义传 `status`。
         // 只认一个会让另一条路静默写成 undefined —— 而 `setStatus` 会拿它跟当前值比、
         // 比不出来就返回 unchanged，症状是"点了没反应但不报错"。
-        const wanted = typeof args?.status === 'string' ? args.status : ''
-        const status = wanted === 'archived' || args?.enabled === false ? 'archived' : 'active'
+        //
+        // **不认识的 status 一律拒绝**，不要兜底成 `active`：早先只有 `archived` 被识别，
+        // 于是传 `candidate` / `superseded` / 拼错的值都会把条目**激活**——一个想撤回
+        // 候选的动作反而让它开始注入，而且回执说成功。
+        const wanted = typeof args?.status === 'string' ? args.status.trim() : ''
+        const KNOWN = ['active', 'candidate', 'archived'] as const
+        let status: 'active' | 'candidate' | 'archived'
+        if (wanted !== '') {
+          if (!(KNOWN as readonly string[]).includes(wanted)) {
+            return { ok: false, error: `unknown status "${wanted}" (expected ${KNOWN.join(' / ')})`, code: 'bad-args' }
+          }
+          status = wanted as typeof status
+        } else {
+          // 只给了 `enabled` 的旧调用方：开关语义 = 归档 / 恢复。
+          status = args?.enabled === false ? 'archived' : 'active'
+        }
         const result = await learner.setStatus(id, status, 'user')
         if (result && result.ok) runtime.invalidate()
         return result
@@ -505,7 +584,15 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         const baseHash = typeof args?.baseHash === 'string' ? args.baseHash : ''
         // 不传 = 不改名称；传空串 = 清空名称（列表按正文首句兜底）。
         const title = typeof args?.title === 'string' ? args.title : undefined
-        const result = await learner.update(id, text, baseHash, title)
+        // 类型：只认四个已知值。传了别的（拼错 / 旧数据里的 core）就拒绝，别静默忽略 ——
+        // 用户以为改成功了、其实没改，比直接报错更糟。
+        let kind: 'preference' | 'fact' | 'correction' | 'procedure' | undefined
+        if (args?.kind !== undefined) {
+          const raw = String(args.kind)
+          if (!AUTO_KINDS.includes(raw as never)) return { ok: false, error: 'unknown kind: ' + raw, code: 'bad-args' }
+          kind = raw as 'preference' | 'fact' | 'correction' | 'procedure'
+        }
+        const result = await learner.update(id, text, baseHash, title, kind)
         if (result && result.ok) runtime.invalidate()
         return result
       } catch (e) {
@@ -733,13 +820,14 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
           if (kindFilter && entry.kind !== kindFilter) continue
           if (workspaceFilter && entry.layer === 'workspace' && entry.workspace !== workspaceFilter) continue
           const st = view.state.entries[entry.id]
-          const needsReview = st && typeof st.needsReview === 'string' && st.needsReview !== ''
+          const pendingReason = st && typeof st.pendingReason === 'string' && st.pendingReason !== '' ? st.pendingReason : ''
+          const reviewDue = st && typeof st.reviewDue === 'string' && st.reviewDue !== '' ? st.reviewDue : ''
           // 工作区条目的显示名：界面按它分节，用户才知道这一组属于哪个项目。
           // 记录可能还没登记（新工作区第一次写入）：留给界面用 hash 短码兜底。
           const wsRecord = entry.layer === 'workspace' && entry.workspace !== ''
             ? view.workspaces.workspaces[entry.workspace]
             : undefined
-          // 默认列「待确认 + 会注入的」：候选不看 needsReview（所有新学条目都是候选，
+          // 默认列「待确认 + 会注入的」：候选不看 pendingReason（所有新学条目都是候选，
           // 不是每条都带理由）；archived / superseded 只在 all=true 时出现。
           if (!includeAll && entry.status !== 'candidate' && !isInjectableStatus(entry.status)) continue
           rows.push({
@@ -748,10 +836,14 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             kind: entry.kind,
             key: entry.key,
             status: entry.status,
-            confidence: entry.confidence,
+            // 档位从证据算（catalog 不再存副本）。界面按它排序与标色。
+            tier: st ? tierOf(st.evidence) : 'inferred',
             oneLine: entry.oneLine,
+            // 正文只在明确要求时返回（`withBody`）：界面列表用不上它，整库带上会让回包
+            // 大一个量级；而 `memory_get` 的搜索需要它 —— 只搜 `oneLine`（160 宽度截断
+            // 摘要）等于「搜不到正文后半截的内容」，与工具描述写的 "or body" 不符。
+            ...(args?.withBody === true ? { body: entry.body } : {}),
             ...(entry.title !== undefined ? { title: entry.title } : {}),
-            pinned: entry.pinned,
             enabled: entry.enabled,
             // 「会不会进上下文」的主判据就是这两个：状态与单条开关。层匹配由调用方判
             // （界面知道自己是谁、模型知道自己的 sid/cwd），op 层不猜。
@@ -772,18 +864,19 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             scene: entry.scene,
             session: entry.session,
             ...(entry.layer === 'workspace' && entry.workspace !== '' && missingWs.has(entry.workspace) ? { wsMissing: true } : {}),
-            ...(st?.degraded !== undefined ? { degraded: st.degraded } : {}),
-            ...(needsReview ? { needsReview: st!.needsReview } : {}),
-            ...(st?.locked === true ? { locked: true } : {}),
-            counters: st?.counters ?? { injected: 0, read: 0, helpful: 0, harmful: 0 },
-            // 证据不在这里返回：一条 quote 可以到 2000 字，界面一次刷新几十条就是几十 KB。
-            // 时间线留最近 5 条（很小），展开单条时再走 `evolution-read` 补证据与依据。
-            transitions: (st?.transitions ?? []).slice(-5),
+            ...(pendingReason !== '' ? { pendingReason } : {}),
+            ...(reviewDue !== '' ? { reviewDue } : {}),
+            // `degraded` / `locked` / `counters` / `transitions` **不在这里返回**：列表一次刷新
+            // 几十条，这些字段没有消费者（界面只在展开单条时读详情，那条路走 `evolution-read`
+            // 的 `describe()`，它完整给出 state 里的计数、证据与时间线）。留在列表里只会让回包
+            // 变大，并让下一个人以为界面某处用着它。
           })
         }
         // 待确认的排前面：界面的「待确认」入口靠这个顺序。
         const rankOf = (s: string): number => s === 'candidate' ? 0 : isInjectableStatus(s) ? 1 : s === 'archived' ? 2 : 3
-        rows.sort((a, b) => rankOf(a.status) - rankOf(b.status) || b.confidence - a.confidence || a.id.localeCompare(b.id))
+        // 排序：待确认优先 → 生效 → 历史；同档按证据档位，再按 id（确定性）。
+        const tierRank = (t: string): number => t === 'confirmed' ? 3 : t === 'quoted' ? 2 : 1
+        rows.sort((a, b) => rankOf(a.status) - rankOf(b.status) || tierRank(b.tier) - tierRank(a.tier) || a.id.localeCompare(b.id))
         return {
           ok: true,
           entries: rows,

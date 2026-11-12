@@ -31,6 +31,12 @@ export interface ScopeAskRequest {
   mergeInto?: string
   /** 会被取代的旧条目 id。 */
   supersedes?: string[]
+  /**
+   * 这条记忆的类型。决定保质期（`ttlDaysOf`：事实 / 做法 30 天后提醒复核，偏好 / 纠正
+   * 不过期），所以卡片必须写明 —— 用户在决定「要不要这条」时，看不到类型就不知道
+   * 自己批准的东西会不会过一阵被催着复核。
+   */
+  kind?: 'preference' | 'fact' | 'correction' | 'procedure'
   /** 工具调用的取消信号：用户取消本轮时卡片跟着结束。 */
   signal?: AbortSignal
 }
@@ -51,6 +57,10 @@ interface CardLabels {
   workspaceDesc: string
   skipDesc: string
   reviseHint: string
+  kindLabel: string
+  kindNames: Record<'preference' | 'fact' | 'correction' | 'procedure', string>
+  kindTtl30: string
+  kindTtlForever: string
 }
 
 const LABELS: Record<CardLang, CardLabels> = {
@@ -65,6 +75,10 @@ const LABELS: Record<CardLang, CardLabels> = {
     workspaceDesc: '只在这个项目生效',
     skipDesc: '这次不记',
     reviseHint: '想改措辞？在下方输入你的说法，模型会按你的话重写后再问你一次。',
+    kindLabel: '类型：',
+    kindNames: { preference: '偏好', fact: '事实', correction: '纠正', procedure: '做法' },
+    kindTtl30: '30 天后提醒复核',
+    kindTtlForever: '不会过期',
   },
   en: {
     header: 'Memory',
@@ -77,6 +91,10 @@ const LABELS: Record<CardLang, CardLabels> = {
     workspaceDesc: 'Applies only in this project',
     skipDesc: 'Do not save this note',
     reviseHint: 'Want different wording? Type your version below; the model will rewrite it and ask again.',
+    kindLabel: 'Type: ',
+    kindNames: { preference: 'preference', fact: 'fact', correction: 'correction', procedure: 'procedure' },
+    kindTtl30: 'review reminder after 30 days',
+    kindTtlForever: 'no expiry',
   },
 }
 
@@ -156,6 +174,15 @@ export function buildScopeQuestion(req: ScopeAskRequest): {
   options.push({ label: labels.skip, description: labels.skipDesc })
 
   const lines = [req.text]
+  // 类型写在正文之后、边界之前：先看结论，再看它是什么类型，最后看适用条件。
+  // 与复核卡片同一套措辞（`evo.review.kind`），两处说的是同一件事。
+  if (req.kind !== undefined) {
+    const ttl = req.kind === 'fact' || req.kind === 'procedure' ? labels.kindTtl30 : labels.kindTtlForever
+    // 括号跟语言走：英文卡片用全角括号会与拉丁字母混排得很怪。
+    const open = lang === 'zh' ? '（' : ' ('
+    const close = lang === 'zh' ? '）' : ')'
+    lines.push('', labels.kindLabel + labels.kindNames[req.kind] + open + ttl + close)
+  }
   if (req.boundary !== undefined && req.boundary !== '') lines.push('', (lang === 'zh' ? '边界：' : 'Boundary: ') + req.boundary)
   if (req.mergeInto !== undefined && req.mergeInto !== '') lines.push('', (lang === 'zh' ? '将合并到已有记忆：' : 'Will merge into: ') + req.mergeInto)
   if (req.supersedes !== undefined && req.supersedes.length > 0) {

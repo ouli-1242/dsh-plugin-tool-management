@@ -193,7 +193,10 @@ export interface EvolutionOverrides {
   /**
    * 自动确认：不再弹范围卡，层与内容全交给 agent 决定。
    *
-   * 关闭时（默认）每一次交互式 learn 都弹卡；后台复习没有界面，始终按自动确认处理。
+   * 关闭时（默认）交互式 learn 每次都弹卡，后台复习学到的条目落「待确认」。
+   * 开着时两条路都直接生效 —— 后台复习同样跟随这一位，**不是**恒为自动：
+   * 复习的输入是另一个模型写的转述，未经任何人过目就进入之后每一次对话的上下文，
+   * 与「没卡片时仍待确认」的承诺冲突（判定见 `review.ts` 的 `autoActive` 一处）。
    */
   autoConfirm?: boolean
   /**
@@ -210,7 +213,14 @@ export interface EvolutionOverrides {
   learnWindowMinutes?: number
   /** 每个窗口内每层最多新增多少条自主记忆；合并 / 更新不占名额。 */
   maxLearnsPerWindow?: number
-  /** 复习用哪个模型；空串 = 会话当前模型。 */
+  /**
+   * 复习用哪个模型；空串 = 会话当前模型。
+   *
+   * 只换**模型**，不换推理强度：`review.ts` 的 `prepareCall` 不传 `reasoningEffort`，
+   * 由适配器按该模型的默认档补齐（官方 `LlmCallConfigAdapterDefaults` 只有
+   * `reasoningEffort` 与 `maxTokens` 两项）。所以把对话调到最高档，后台复习仍是默认档 ——
+   * 成本不跟着涨，用户不必为此担心。
+   */
   model?: string
   /** 笔记风格：default（默认）/ detailed / minimal / custom:<id>。 */
   noteStyle?: NoteStyle
@@ -230,7 +240,7 @@ export const DEFAULT_EVOLUTION_SETTINGS: EvolutionSettings = {
   learnGlobal: false,
   learnWorkspace: false,
   autoConfirm: false,
-  maxReviewsPerSession: 5,
+  maxReviewsPerSession: 3,
   learnWindowMinutes: NOTE_RATE_DEFAULTS.minutes,
   maxLearnsPerWindow: NOTE_RATE_DEFAULTS.notes,
   model: '',
@@ -242,7 +252,7 @@ export const DEFAULT_EVOLUTION_SETTINGS: EvolutionSettings = {
 export interface EffectiveEvolutionConfig extends EvolutionSettings {
   /** 两项任一为真；工具可见性与后台复习读它。 */
   enabled: boolean
-  /** `inject` 已解析：跟随两个开关，显式 true 也不能越过「层没开」。 */
+  /** `inject` 已解析：**恒等于 `enabled`**（独立开关已下线，见 `resolveEffectiveConfig`）。 */
   inject: boolean
   /** 最具体的那一档：界面显示「来源：本工作区设置」。 */
   source: 'global' | 'workspace' | 'session'
@@ -266,7 +276,11 @@ const boolOf = (v: unknown, fallback: boolean): boolean => (typeof v === 'boolea
 function legacyLearnFlags(raw: any): { global: boolean; workspace: boolean } | undefined {
   if (typeof raw?.enabled !== 'boolean') return undefined
   if (raw.enabled === false || raw.learnScope === 'off') return { global: false, workspace: false }
+  // `writeTarget` 是旧版的显式上限；`learnScope` 是更早的同类概念（`workspace` / `session` 都表示
+  // "只在这个项目里学"）。两个字段都认，否则只写了 `learnScope='workspace'` 的旧配置会掉进
+  // 下面的兜底、升级后**从工作区扩大到全局** —— 那是用户从没同意过的权限变化。
   if (raw.writeTarget === 'workspace' || raw.writeTarget === 'session') return { global: false, workspace: true }
+  if (raw.learnScope === 'workspace' || raw.learnScope === 'session') return { global: false, workspace: true }
   return { global: true, workspace: true }
 }
 
@@ -332,8 +346,14 @@ export function hasOverrides(o: EvolutionOverrides | undefined): boolean {
 /**
  * 逐字段解析：会话 → 工作区 → 全局，取第一个有定义的。
  *
- * `inject` 的默认值**跟随解析后的 `enabled`**：全新安装（全局关）不会因为磁盘上有历史文件
- * 而注入自动记忆。显式 `inject=false` 可以"只学不用"；显式 `true` 不能绕过两个开关。
+ * `inject` **恒等于解析后的 `enabled`**：层的开关是唯一的授权边界，注入不再有独立开关。
+ *
+ * 曾经有一个「只学不用」的独立开关（`inject=false`），已下线 —— 它的语义与「关掉层的开关」
+ * 几乎重叠（关掉层就是既不学也不注入），而留在界面上只会让用户以为可以「学但不生效」，
+ * 那是两套授权边界并存。
+ *
+ * ⚠️ 旧配置里可能还存着 `inject: false`。这里**刻意忽略它**：界面上已经没有那颗开关，
+ * 认它等于让那些用户的自主记忆永久不注入，且找不到地方改回来。
  */
 export function resolveEffectiveConfig(
   global: EvolutionSettings,
@@ -351,9 +371,8 @@ export function resolveEffectiveConfig(
   const learnGlobal = pick('learnGlobal') ?? global.learnGlobal
   const learnWorkspace = pick('learnWorkspace') ?? global.learnWorkspace
   const enabled = learnGlobal || learnWorkspace
-  // 全局也可能显式设了 `inject`（"只记不用"）；只查两层覆盖会把它当成"没设"。
-  // 显式 true 只在至少一层开着时才算数：注入不能绕过层的授权。
-  const injectRaw = pick('inject') ?? global.inject
+  // `inject` 不再读配置：那颗「只学不用」的开关已下线，注入恒跟随层的开关。
+  // 旧文件里的 `inject: false` 被刻意忽略（理由见函数头注释）。
   // 自定义档的定义永远来自全局；覆盖层只能选，不能改。选中的 id 被删掉时退回默认档。
   const customStyles = global.customNoteStyles ?? []
   const pickedStyle = pick('noteStyle')
@@ -365,7 +384,7 @@ export function resolveEffectiveConfig(
     learnWorkspace,
     autoConfirm: pick('autoConfirm') ?? global.autoConfirm,
     enabled,
-    inject: injectRaw === undefined ? enabled : (enabled && injectRaw),
+    inject: enabled,
     maxReviewsPerSession: pick('maxReviewsPerSession') ?? global.maxReviewsPerSession,
     learnWindowMinutes: pick('learnWindowMinutes') ?? global.learnWindowMinutes,
     maxLearnsPerWindow: pick('maxLearnsPerWindow') ?? global.maxLearnsPerWindow,
@@ -453,7 +472,8 @@ export interface EvolutionConfigStore {
   /** 读三份并解析；`scopeKey` / `sid` 由调用方从 agent 取（本模块不碰宿主对象）。 */
   effective(scopeKey: string | undefined, sid: string | undefined): Promise<EffectiveEvolutionConfig>
   /** 写全局设置（整体替换，未知字段丢弃）。 */
-  writeSettings(next: EvolutionSettings): Promise<{ ok: true; settings: EvolutionSettings } | { ok: false; error: string }>
+  /** 写全局设置。传**部分字段**：落盘时与锁内新读到的磁盘值合并，不覆盖并发改动。 */
+  writeSettings(patch: Partial<EvolutionSettings>): Promise<{ ok: true; settings: EvolutionSettings } | { ok: false; error: string }>
   /** 写某个工作区的覆盖（`overrides` 为 undefined 表示清除覆盖）。 */
   writeWorkspace(scopeKey: string, cwd: string, label: string, overrides: EvolutionOverrides | undefined): Promise<{ ok: true; hash: string } | { ok: false; error: string }>
   /** 标记 / 清除工作区失效（不刷新 lastSeenAt）。 */
@@ -537,12 +557,15 @@ export function createEvolutionConfig(deps: EvolutionConfigDeps): EvolutionConfi
     }
   }
 
-  async function writeSettings(next: EvolutionSettings): Promise<{ ok: true; settings: EvolutionSettings } | { ok: false; error: string }> {
+  async function writeSettings(patch: Partial<EvolutionSettings>): Promise<{ ok: true; settings: EvolutionSettings } | { ok: false; error: string }> {
     await ensureEvolutionDir()
     return deps.withWriteLock(async () => {
       const read = await readForWrite(hubPath(EVOLUTION_SETTINGS_FILE), '自主记忆设置')
       if (!read.ok) return read
-      const normalized = normalizeEvolutionSettings({ ...normalizeEvolutionSettings(read.raw), ...next })
+      // **基线取锁内新读到的磁盘值**，不是调用方手里那份可能已经过期的完整对象。
+      // 早先签名收的是 `EvolutionSettings`（完整），调用方用 3 秒缓存的 `readSettings()`
+      // 拼出整份再传进来 —— 两个窗口同时改不同字段时，后写的会用旧值覆盖前一个的改动。
+      const normalized = normalizeEvolutionSettings({ ...normalizeEvolutionSettings(read.raw), ...patch })
       await deps.writeJsonFile(hubPath(EVOLUTION_SETTINGS_FILE), normalized)
       settingsCache = { at: Date.now(), value: normalized }
       return { ok: true as const, settings: normalized }

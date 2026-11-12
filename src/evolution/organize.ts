@@ -8,11 +8,17 @@
 //   · merge   —— 同层两条说法几乎一样（bigram Jaccard ≥ 0.82），key 不同 → 合成一条
 //   · archive —— 候选长期没人确认 → 收起来（不删）
 //
+// `OrganizeAction` 里还有 `promote`（工作区条目提为全局），这里**从不产出**：
+// 跨层提升不是「整理」—— 它改变的是适用范围，而整理只重排同一层里的东西。
+// 类型与 `applyOrganize` 都留着它，是因为 `evolution-promote` 这个 op 仍然注册着
+// （模型侧与界面都不调用，见 `op-registry.ts`）；产出它的判据要是将来加进来，
+// 落盘路径已经通了。别在 `draftOrganize` 里补一条 —— 那会让「整理」一次改掉两层。
+//
 // 为什么不用模型判断"这两条是不是一回事"：草案要可解释、可复现。同一个库、同样的输入，
 // 今天算出 3 条建议、明天算出 5 条，用户会不敢点。相似度阈值偏保守（宁可漏合并）正是为此。
 
 import { MERGE_SIMILARITY, similarity, type ExistingEntry } from './gates.js'
-import type { EntryState } from './state.js'
+import { tierOf, type EntryState } from './state.js'
 import type { MemoryLayer } from '../memories/constants.js'
 
 export type OrganizeAction = 'merge' | 'archive' | 'promote'
@@ -68,9 +74,15 @@ export function draftOrganize(input: OrganizeInput): OrganizeDraft[] {
     .slice()
     .sort((a, b) => a.id.localeCompare(b.id))
   const stateOf = (id: string): EntryState | undefined => input.states[id]
-  const confOf = (id: string): number => {
-    const c = stateOf(id)?.confidence
-    return typeof c === 'number' && Number.isFinite(c) ? c : 0
+  /**
+   * 合并时保留哪条：证据档位高的 → id 小的（确定性兜底）。
+   *
+   * 早先比的是 `confidence` 小数，而那个数只由模型自报的 `source` 换算，两条同为
+   * 推断的笔记之间它的差别没有意义。档位至少是能解释的：确认过的说法优先留下来。
+   */
+  const tierRankOf = (id: string): number => {
+    const st = stateOf(id)
+    return st ? { confirmed: 3, quoted: 2, inferred: 1 }[tierOf(st.evidence)] : 0
   }
 
   const drafts: OrganizeDraft[] = []
@@ -86,10 +98,13 @@ export function draftOrganize(input: OrganizeInput): OrganizeDraft[] {
       const b = autos[j]!
       if (taken.has(b.id) || b.layer !== a.layer || b.key === a.key) continue
       if (b.text.trim() === '') continue
+      // 类型不同的两条不合并：相似度高只说明说法像，不说明它们是同一类东西。
+      // 把 `procedure` 并进 `preference` 会让「30 天后提醒复核」凭空消失（偏好不过期）。
+      // 两边都缺 kind（旧数据）时放行 —— 那种情况下没有可丢的类型信息。
+      if (a.kind !== undefined && b.kind !== undefined && a.kind !== b.kind) continue
       const sim = similarity(a.text, b.text)
       if (sim < MERGE_SIMILARITY) continue
-      // 保留哪条：置信度高 → id 小的（确定性兜底）。
-      const keep = confOf(b.id) > confOf(a.id) ? b : a
+      const keep = tierRankOf(b.id) > tierRankOf(a.id) ? b : a
       const drop = keep === a ? b : a
       // 已经在同一层里"合并过一对"的不再参与第二对：三条几乎一样时两两合并会算两次，
       // 第二次合并的目标在第一次里已被吸收。

@@ -10,7 +10,7 @@
 // 由门禁给出明确错误 —— 拒绝比悄悄写到用户关掉的那一层好。
 
 import { LAYER_GLOBAL, LAYER_WORKSPACE, type MemoryLayer } from '../memories/constants.js'
-import type { EvidenceSource } from './state.js'
+
 
 /** 两个自主记忆开关给出的允许层。 */
 export interface RouteAllowed {
@@ -24,13 +24,17 @@ export interface RouteAllowed {
  * 刻意收窄：只认"跨项目"与"永远/以后都"这两类**明确**表述。不认"一般"、"通常"、
  * "最好"——那些是偏好强度，不是作用域。误判的代价是把项目约定升级成所有项目的约定，
  * 而用户根本不知道它存在于全局层。
+ *
+ * 同样不认 `总是` / `always`：它们是**频率**，不是范围。"提交前总是先跑测试"在项目里说，
+ * 说的是这个项目的习惯；升到全局层之后，用户在别的仓库也会看到它。自动确认开着时更没有
+ * 卡片可以纠正 —— 这类词一个都不能留。
  */
 const GLOBAL_PATTERNS: readonly RegExp[] = [
   /所有项目/, /任何项目/, /每个项目/, /各个项目/, /跨项目/,
-  /以后都/, /今后都/, /一律/, /永远都?/, /总是/,
+  /以后都/, /今后都/, /一律/, /永远都?/,
   /不(?:管|论)哪(?:个|一)(?:项目|仓库)/,
   /\ball projects?\b/i, /\bevery project\b/i, /\bacross projects?\b/i,
-  /\bfrom now on\b/i, /\balways\b/i,
+  /\bfrom now on\b/i,
 ]
 
 /** 场景措辞：只有它才允许落场景层（场景是手动单选、默认不启用的，往里写等于让它消失）。 */
@@ -46,8 +50,13 @@ export const hasScenePhrase = (text: string): boolean => SCENE_PATTERNS.some((re
 export interface RouteInput {
   /** 正文（判措辞用）。 */
   text: string
-  /** 证据来源：只有用户明说/纠正才可能升全局。 */
-  source: EvidenceSource
+  /**
+   * 这条有没有可核对的原话依据。只有它才可能升全局层。
+   *
+   * 早先判的是模型自报的 `source`：模型声明 `user_explicit` 就能把一条项目内的
+   * 习惯抬到「所有项目」。现在来源由系统核对引句得出，这个布尔就是核对结果。
+   */
+  quoted: boolean
   /** 两个开关给出的允许层。 */
   allowed: RouteAllowed
   /** 工作区 hash16；取不到 cwd 时为 undefined。 */
@@ -97,7 +106,7 @@ export function routeLayer(input: RouteInput): RouteResult {
   // session / scene 一律按本项目解释。
   const wantsGlobal = input.forcedLayer !== undefined
     ? input.forcedLayer === LAYER_GLOBAL
-    : ((input.source === 'user_explicit' || input.source === 'user_correction') && hasGlobalPhrase(input.text))
+    : (input.quoted && hasGlobalPhrase(input.text))
 
   // `desired` 记**原始想要**，不随后续降级改写：界面解释"为什么被降级"靠它对照
   // （想要全局、落了本项目），改写了这句解释就没法生成。

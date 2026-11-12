@@ -40,7 +40,10 @@ const META_FILE = 'meta.json'
 export const DEFAULT_PRESET_DESC_MAX_LENGTH = 300
 
 /**
- * 预设正文的字节上限（256 KiB），与记忆注入总盘（`DEFAULT_MAX_BYTES`）同档。
+ * 预设正文的字节上限（256 KiB），与记忆注入总盘（`memories/constants.ts` 的 `DEFAULT_MAX_BYTES`）同档。
+ *
+ * 注意别与 `project-instructions.ts` 里同名的 `DEFAULT_MAX_BYTES`（64 KiB，单个指令文件上限）
+ * 搞混 —— 两个常量同名不同值，说的是两件事。
  *
  * 为什么需要：注入侧虽按 64 KiB 截断（`AGENTS_MD_MAX_BYTES`），但盘上可以无限大，
  * 而每次读都要整份进内存。上限拦在**写**这一侧 —— 已存在的超大文件不阻断读取，

@@ -19,6 +19,27 @@ const TARGET = [
   'src/mcp/patch-yaml.ts',
   'src/skills/frontmatter.ts',
   'src/skills/readonly-discovery.ts',
+  // 自主记忆全套：`kind` / 保质期 / 墓碑 / 增量快照都在这几个模块里，
+  // 一个越界下标就能让「这条该不该注入」判错，且不报错。
+  'src/evolution/cold.ts',
+  'src/evolution/config.ts',
+  'src/evolution/digest.ts',
+  'src/evolution/episodes.ts',
+  'src/evolution/evidence.ts',
+  'src/evolution/gates.ts',
+  'src/evolution/limits.ts',
+  'src/evolution/maintenance.ts',
+  'src/evolution/notes.ts',
+  'src/evolution/organize.ts',
+  'src/evolution/review.ts',
+  'src/evolution/route.ts',
+  'src/evolution/runtime.ts',
+  'src/evolution/scope-card.ts',
+  'src/evolution/state.ts',
+  'src/evolution/write.ts',
+  // `memory_note` / `memory_get` 的实现：两个工具的全部判定都在这一个文件里，
+  // 一次越界读取就会把「这条属于用户记忆还是自主笔记」判错。
+  'src/tools/memory.ts',
 ]
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))

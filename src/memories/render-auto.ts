@@ -8,21 +8,20 @@
 //    整段（含用户记忆）重发；现在只有变化的那一层会重发。
 //
 // ② **不按场景分组**。全局层就是全局；「本工作区」块里的工作区 / 旧会话 / 旧场景条目都按
-//    本地处理，不写成 `## Scene: X` —— 那会让模型以为用户建了一个叫 `_ws/3f2a` 的场景。
+//    本地处理，不写成 `## Scene Memories: X` —— 那会让模型以为用户建了一个叫 `_ws/3f2a` 的场景。
 //
 // ③ **文本稳定**。注入去重按正文字节比对，任何"按当前时间算"的东西（相对时间、随机顺序、
 //    每次重排）都会让整段每轮重发。所以：条目按固定规则排序，时间只体现为分数（影响谁进来），
 //    不体现为文本。
 
 import {
-  AUTO_L0_MAX, AUTO_MAX_ENTRIES,
   AUTO_MEMORY_NOTE, AUTO_MEMORY_NOTE_PARTIAL,
   LAYER_GLOBAL, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE, TRUNCATION_MARKER,
   type MemoryLayer,
 } from './constants.js'
 import { isInjectableStatus, type CatalogEntry } from './catalog.js'
 import { itemBlock } from './projection.js'
-import { scoreOf, type EntryCounters, type EvolutionState } from '../evolution/state.js'
+import { scoreOf, tierOf, type EntryCounters, type EvolutionState } from '../evolution/state.js'
 
 /** 自动记忆的两个注入层。 */
 export type AutoLayer = 'global' | 'workspace'
@@ -117,7 +116,7 @@ export function lineOf(entry: CatalogEntry): string {
 }
 
 const countersOf = (state: EvolutionState, id: string): EntryCounters =>
-  state.entries[id]?.counters ?? { injected: 0, read: 0, helpful: 0, harmful: 0 }
+  state.entries[id]?.counters ?? { injected: 0, read: 0 }
 
 /** 这条目录项是否属于这一层。workspace 域兼容旧数据：会话层按 sid、场景层按启用场景。 */
 function inLayer(entry: CatalogEntry, layer: AutoLayer, scope: AutoRenderScope): boolean {
@@ -162,32 +161,41 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
   const usable = budget - noteCost - styleCost
   const scope = input.scope
 
-  // 候选：状态可注入 + 层匹配 + 未挂待裁决。L0（core / playbook / pinned）只影响预算次序。
-  const maxHelpful = Math.max(1, ...Object.values(input.state.entries).map((e) => e.counters?.helpful ?? 0))
-  const candidates: Array<{ entry: CatalogEntry; score: number; l0: boolean }> = []
+  // 候选：状态可注入 + 层匹配 + 没有待裁决理由。
+  const candidates: Array<{ entry: CatalogEntry; score: number }> = []
   for (const entry of input.entries) {
     if (!entry.enabled) continue
     if (!isInjectableStatus(entry.status)) continue
     if (!inLayer(entry, layer, scope)) continue
     const st = input.state.entries[entry.id]
     // 待裁决的不注入：与用户记忆冲突、或表述有歧义的条目，等用户确认后才算数。
-    if (st && typeof st.needsReview === 'string' && st.needsReview !== '') continue
-    // playbook 是从 core 晋升来的，常驻待遇跟着走：它比普通 active 更值得每次露一面。
-    // 不再设信心门槛：能进 `isInjectableStatus` 的条目已经过用户在记忆页 / 卡片上确认；
-    // 再拿 confidence 筛一次，正是「确认了却不注入」那类静默失效的来源。
-    const l0 = entry.status === 'core' || entry.status === 'playbook' || entry.pinned
+    //
+    // **只看 `pendingReason`，不看 `reviewDue`**：后者是「这条有点旧了，看一眼」的提醒，
+    // 不是停用。两者曾共用一个字段，于是维护扫描一挂 TTL 提醒，一条仍在生效的记忆就从
+    // 上下文里消失了 —— 界面还显示生效、预算还把它算进去，而模型一条都看不到。
+    if (st && typeof st.pendingReason === 'string' && st.pendingReason !== '') continue
     candidates.push({
       entry,
-      l0,
       score: scoreOf(
-        { confidence: entry.confidence, pinned: entry.pinned, updatedAt: new Date(entry.mtime || 0).toISOString() },
+        {
+          // 档位从证据算，不从 catalog 读：catalog 是派生数据，多存一份就多一处会漂。
+          tier: st ? tierOf(st.evidence) : 'inferred',
+          updatedAt: new Date(entry.mtime || 0).toISOString(),
+        },
         countersOf(input.state, entry.id),
-        maxHelpful,
       ),
     })
   }
 
-  if (candidates.length === 0) return { ...empty, budget, dropped: 0 }
+  // 一条候选都没有：只发风格行。风格行是「以后怎么写」的写作规范，与「现在有没有条目可注入」
+  // 无关 —— 只学不用（`inject: false`）正好落进这里：条目一条都不进，而学习还在继续，
+  // 吞掉风格行会让用户选的「详细 / 极简 / 自定义」对这批笔记完全失效，而 `memory_note` 的
+  // 工具描述还让模型去 `follow the style line in the learned-notes section`。
+  if (candidates.length === 0) {
+    if (styleLine === '') return { ...empty, budget, dropped: 0 }
+    const text = styleLine + '\n'
+    return { ...empty, text, budget, dropped: 0, tokens: Math.ceil(Buffer.byteLength(text, 'utf8') / 3) }
+  }
 
   // 排序必须是**确定**的：分数降序 → id 升序（同分时给一个稳定次序，否则每次 pre-step 顺序都变，
   // 去重指纹跟着变，整段重发）。
@@ -196,18 +204,22 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
   // 预算按**实际渲染块**的字节记，不按 `estTokens`：块里还有 `- `、加粗的名称与围栏，
   // 估算口径会少算，条目一多就顶穿总盘。
   const costOf = (entry: CatalogEntry): number => Buffer.byteLength(lineOf(entry), 'utf8')
+  // **固定开销要先扣掉**：段尾那句收尾语、两个换行、以及"还有 N 条没列出"的截断标记。
+  //
+  // 早先只累计条目块，标记与换行完全没进 `spent` —— 于是 `auto.text` 实测会超出本层预算
+  // 几十到上百字节，两层叠起来就顶穿 256 KiB 的总盘。"按实际渲染块字节记"是这一层的
+  // 不变量，标记也是渲染块的一部分。
+  const tailBytes = Buffer.byteLength('\n' + tailOf(AUTO_MEMORY_NOTE_PARTIAL) + '\n', 'utf8')
+  const markerBytes = Buffer.byteLength('\n' + `${TRUNCATION_MARKER} ${candidates.length} more learned note(s) not shown; list them with memory_get (kind=note).` + '\n', 'utf8')
+  const fixed = tailBytes + markerBytes
   const picked: CatalogEntry[] = []
-  let l0Count = 0
   let spent = 0
   for (const cand of candidates) {
-    if (picked.length >= AUTO_MAX_ENTRIES) break
+    // 只按字节停：装不下就跳过这一条、继续试更短的，直到预算用尽。
+    // 不设条数上限 —— 条数多到读不动的问题由字节预算自己解决（正文越长装得越少）。
     const cost = costOf(cand.entry)
-    if (spent + cost > usable) continue
-    if (cand.l0) {
-      // L0 常驻：不受层配额限制，只受 L0 条数上限与总盘限制。
-      if (l0Count >= AUTO_L0_MAX) continue
-      l0Count++
-    }
+    // 预留 `fixed`：真出现截断时标记要放得下，不截断时那几个字节就是安全余量。
+    if (fixed + spent + cost > usable) continue
     picked.push(cand.entry)
     spent += cost
   }

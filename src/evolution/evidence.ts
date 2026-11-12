@@ -67,8 +67,8 @@ export function isGenuineUserMessage(msg: any): boolean {
  * 收下这一步的用户原话。
  *
  * 调用点只有 `session/event` 的 `user/message`，一次一条。所以这里是**追加**，不是替换：
- * 替换会让缓存恒为最后一句，模型再引用三轮前说过的原话时证据门判 `not-verbatim` 并**硬拒**
- * （不是降级）—— 「以后提交信息都写中文」这种话说完两轮就再也记不下来了。
+ * 替换会让缓存恒为最后一句，模型再引用三轮前说过的原话时判 `not-verbatim`，证据档位掉成
+ * `model_inference` —— 「以后提交信息都写中文」这种话说完两轮就只能按推断存了。
  */
 export function captureUserTexts(sessionId: string, messages: readonly unknown[]): void {
   if (!sessionId) return
@@ -93,9 +93,11 @@ export function captureUserTexts(sessionId: string, messages: readonly unknown[]
   const kept: string[] = []
   let bytes = 0
   for (let i = all.length - 1; i >= 0 && kept.length < MAX_MESSAGES; i--) {
-    const size = Buffer.byteLength(all[i], 'utf8')
+    // 显式兜住 undefined：下标由循环条件保证有效，但 `noUncheckedIndexedAccess` 不认这个推理。
+    const line = all[i] ?? ''
+    const size = Buffer.byteLength(line, 'utf8')
     if (bytes + size > MAX_BYTES && kept.length > 0) break
-    kept.unshift(all[i])
+    kept.unshift(line)
     bytes += size
   }
   store.delete(sessionId)
@@ -142,7 +144,7 @@ export function checkQuote(sessionId: string, quote: string): QuoteCheck {
   const texts = recentUserTexts(sessionId)
   if (texts.length === 0) return { ok: false, reason: 'no-cache' }
   for (let i = 0; i < texts.length; i++) {
-    if (texts[i].includes(q)) return { ok: true, index: i }
+    if ((texts[i] ?? '').includes(q)) return { ok: true, index: i }
   }
   return { ok: false, reason: 'not-verbatim' }
 }

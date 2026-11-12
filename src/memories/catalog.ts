@@ -78,8 +78,6 @@ export interface CatalogEntry {
   boundary?: string
   bytes: number
   estTokens: number
-  confidence: number
-  pinned: boolean
   enabled: boolean
   mtime: number
   size: number
@@ -168,8 +166,6 @@ export async function buildCatalog(memoriesRoot: string, index: RulesIndex): Pro
       oneLine,
       bytes,
       estTokens: estimateTokens(bytes),
-      confidence: derived.autoConfidence ?? 0,
-      pinned: idx?.pinned === true,
       enabled: idx?.enabled !== false,
       mtime: info.mtimeMs,
       size: info.size,
@@ -203,8 +199,6 @@ export function normalizeCatalog(raw: any): CatalogFile {
       oneLine: v.oneLine,
       bytes: typeof v.bytes === 'number' ? v.bytes : estimateTokens(0),
       estTokens: typeof v.estTokens === 'number' ? v.estTokens : estimateTokens(0),
-      confidence: typeof v.confidence === 'number' ? v.confidence : 0,
-      pinned: v.pinned === true,
       enabled: v.enabled !== false,
       mtime: typeof v.mtime === 'number' ? v.mtime : 0,
       size: typeof v.size === 'number' ? v.size : 0,
@@ -268,8 +262,6 @@ export function catalogEntryOf(
     oneLine,
     bytes,
     estTokens: estimateTokens(bytes),
-    confidence: fields.confidence ?? 0,
-    pinned: fields.pinned === true,
     enabled: fields.enabled !== false,
     mtime: fields.mtime ?? 0,
     size: fields.size ?? bytes,

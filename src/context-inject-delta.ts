@@ -164,13 +164,20 @@ export function planIncremental(input: {
     || state.deltaCount >= (input.maxDeltas ?? 10)) {
     return { kind: 'full', mode, entries }
   }
-  // 截断态下差集表达不了"未列出清单"的变化：账本也是截断态就只判"变没变"，
-  // 内容一变就由上层回全量；两边都是截断态时不必每步重发。
-  if (input.snapshot.truncated) return { kind: 'none', mode, entries }
+  // 截断态：**仍然走差集**，只是上限更严。
+  //
+  // 这里不能因为两边都是截断态就返回 `none`（"不必每步重发"）。一旦条目多到预算装不下，
+  // 这一层就**永久没有增量** —— 之后新增一条、删掉一条都只能整块重发，与「新增一条
+  // 只重发对应那一层」的承诺相反。
+  //
+  // 截断态与完整态的差别只在段尾那句「还有 N 条没列出」：`+ / ~ / -` 三类改动对它同样
+  // 成立（增删条目会让那个 N 变，而差集本身就带着变化的条目）。所以照常算差集，
+  // 只是把"改动太多就回全量"的阈值压低 —— 截断态的整块重发本来就比完整态贵。
   const diff = diffIncremental(state.entries, input.snapshot.entries)
   const changes = diffCount(diff)
   if (changes === 0) return { kind: 'none', mode, entries }
-  if (changes > (input.maxChanges ?? 40)) return { kind: 'full', mode, entries }
+  const limit = input.maxChanges ?? (input.snapshot.truncated ? 12 : 40)
+  if (changes > limit) return { kind: 'full', mode, entries }
   const text = renderIncrementalDelta(diff, input.snapshot.groupTitle)
   // 差集不比全量小就没有省的意义；回全量还能顺手把账本重置成干净的一份。
   if (text === '' || Buffer.byteLength(text, 'utf8') >= Buffer.byteLength(input.fullText, 'utf8')) {

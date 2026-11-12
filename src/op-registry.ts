@@ -134,6 +134,8 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   // 写要令牌。**不受场景锁冻结** —— 场景锁冻结的是"这个场景的内容"，而关掉主动学习是
   // 安全侧动作，锁定期间更应该允许（否则用户想停都停不了）。
   'evolution-status': { readonly: true },
+  // 可用模型清单（「复习模型」下拉框）：只问宿主 llm 服务，不写任何东西。
+  'evolution-models': { readonly: true },
   'evolution-settings': { write: true, writeWhen: (a) => a.set === true },
   'evolution-toggle': { write: true },
   // 列表读的是 catalog（派生索引，丢了可重建），与 `rules-list` 同一档：写的是自己的侧车，
@@ -162,8 +164,14 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   'evolution-restore': { write: true, frozen: true },
   'evolution-trash-remove': { write: true, frozen: true },
   'evolution-promote': { write: true },
-  // 详情读的就是那条文件 + state，只读。
-  'evolution-read': { readonly: true },
+  // 详情读的就是那条文件 + state。
+  //
+  // **但它是两态 op**：`touch: true` 时会把 `counters.read` 加一并写回 state.json ——
+  // 那是「模型真的用了这条笔记」的唯一信号，维护扫描按它决定该不该催、该不该归档。
+  // 早先这里只标 `readonly`，于是这次写入既不过写门禁、也不进审计：读操作在冻结期
+  // 照样改盘，而登记表声称它只读。`writeWhen` 让它按实际行为分类，界面展开详情
+  // （不传 `touch`）仍然是纯读。
+  'evolution-read': { write: true, writeWhen: (a) => a.touch === true },
   // 算草案不动任何文件（纯函数读快照），与 list 同档。
   'evolution-organize': { readonly: true },
   // 应用草案才落盘：合并 / 归档 / 提升，与 learn 同权。

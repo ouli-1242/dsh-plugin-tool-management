@@ -164,7 +164,7 @@ export interface IncrementalEntry {
   key: string
   text: string
   /**
-   * 分组标题，必须与全量块里的 `##` 标题一致（`Always-on memories` / `Scene: <名>`）。
+   * 分组标题，必须与全量块里的 `##` 标题一致（`Always-on memories` / `Scene Memories: <名>`）。
    * `undefined` = 没有分组，差集里归到 `groupTitle`（缺省 `Learned notes`）。
    */
   group?: string

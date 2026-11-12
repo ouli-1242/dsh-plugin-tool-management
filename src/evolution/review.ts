@@ -45,7 +45,10 @@ export interface ReviewItem {
   /** 行名 / 注入行的加粗名；缺省时列表按正文首句兜底。 */
   title?: string
   kind?: 'preference' | 'fact' | 'correction' | 'procedure'
-  source: 'user_explicit' | 'user_correction' | 'tool_verified' | 'model_inference'
+  /**
+   * 复习模型声称的用户原话。**不是证据档位**：写入管线会拿它做逐字核对，
+   * 核不上直接拒。`source` 字段已删除 —— 来源由核对结果决定。
+   */
   quote?: string
   key?: string
   boundary?: string
@@ -53,7 +56,6 @@ export interface ReviewItem {
   ttlDays?: number
 }
 
-const SOURCES = new Set(['user_explicit', 'user_correction', 'tool_verified', 'model_inference'])
 const KINDS = new Set(['preference', 'fact', 'correction', 'procedure'])
 const LAYERS = new Set(['global', 'workspace', 'scene', 'session'])
 
@@ -86,7 +88,7 @@ export function extractJson(text: string): unknown {
  * 校验并裁剪模型给的条目。
  *
  * **越界字段直接丢，不整批拒**：一条写错了 kind 不该让另外两条也白跑。
- * 但缺 `text` / `source` 的条目要丢 —— 那两个是写入管线的必填项，补不出来。
+ * 缺 `text` 的条目要丢 —— 那是写入管线的必填项，补不出来。
  */
 export function parseReviewItems(raw: unknown): ReviewItem[] {
   const box = raw && typeof raw === 'object' ? (raw as { memories?: unknown; items?: unknown }) : {}
@@ -100,9 +102,8 @@ export function parseReviewItems(raw: unknown): ReviewItem[] {
     // 在这里截会存下一句被腰斩的话，而用户看不到任何提示 —— 那正是本版修掉的
     // 「静默截断」。截断只留给展示字段（标题）。
     const text = typeof r.text === 'string' ? r.text.trim() : ''
-    const source = typeof r.source === 'string' && SOURCES.has(r.source) ? (r.source as ReviewItem['source']) : 'model_inference'
     if (text === '') continue
-    const item: ReviewItem = { text, source }
+    const item: ReviewItem = { text }
     const title = typeof r.title === 'string' ? truncateToWidth(r.title.trim(), MAX_AUTO_TITLE_WIDTH) : ''
     if (title !== '') item.title = title
     if (typeof r.kind === 'string' && KINDS.has(r.kind)) item.kind = r.kind as ReviewItem['kind']
@@ -165,8 +166,8 @@ const CHECKPOINT_FILTER = [
   'The input is a host-compiled conversation checkpoint meant for resuming the current task, not for long-term memory.',
   'Keep ONLY what will still be true in a different conversation: user preferences, corrections of your behaviour, durable constraints, project facts that cannot be read from the code, and repeatable procedures.',
   'DISCARD everything task-local: Current Work, Next Step, Pending Jobs, Files and Code, Errors and Fixes, file paths, commands, error strings, dependency versions, and one-off instructions.',
-  'The checkpoint is a paraphrase, not the user\'s words: never invent a `quote`; set `source` to "model_inference".',
-  'The list at the end of the user message holds what is ALREADY in every conversation (the user\'s own memories and their global instructions, not just earlier notes). Do not restate any of it in other words — only add what that list does not already say.',
+  'The checkpoint is a paraphrase, not the user\'s words: never invent a `quote`. Leave it out entirely.',
+  'The list at the end of the user message holds what is ALREADY in every conversation (the user\'s own memories and their global instructions, not just earlier notes). Do not restate any of it in other words — only add what that list does not already say. Saying the same thing with different wording is still a duplicate: the write path compares wording, not meaning, so it will not catch it for you.',
 ].join(' ')
 
 /** 旧版按轮次复习的提示：那份 episode 里是用户逐字原话，可以要求引句核对。 */
@@ -179,7 +180,18 @@ const TURN_SYSTEM_PROMPT = [
   'Write every `text` in the user\'s language.',
   'Give every item a short `title` (2-8 words) in the user\'s language; it becomes the row name.',
   'At most 3 items. When in doubt, return fewer — a wrong memory is injected into every later conversation.',
-  'Output strict JSON: {"memories":[{"title":"Reply style","text":"the note","kind":"preference|fact|correction|procedure","source":"user_explicit|user_correction|tool_verified|model_inference","quote":"exact user words","key":"kebab-case-slot","layer":"workspace","boundary":"when it might not hold"}]}',
+  'The list at the end holds what is already in every conversation. Do not restate it in other words: the write path compares wording, not meaning, so a paraphrase will not be caught as a duplicate.',
+  // 与压缩那条**同一套判据**：两条路径都要求输出 `kind`，只给其中一条判据等于让另一条按字面猜。
+  // `kind` 决定保质期（见 `ttlDaysOf`）：`fact` / `procedure` 30 天后提醒复核，
+  // `preference` / `correction` 不过期。猜错方向的代价不对称 —— 做法被判成偏好会永久驻留，
+  // 纠正被判成事实会在一个月后自己消失。
+  '`kind` decides how long the note lives, so pick by what the sentence IS:',
+  '- `preference` — how you should behave or answer (tone, format, language, what to avoid).',
+  '- `correction` — the user fixing a mistake you already made; it names no reusable method.',
+  '- `fact` — something true about this project or machine that cannot be read from the code.',
+  '- `procedure` — a repeatable way of doing something ("when X, do Y first").',
+  'If it tells you how to act in a future situation, it is `procedure`, not `correction`.',
+  'Output strict JSON: {"memories":[{"title":"Reply style","text":"the note","kind":"preference|fact|correction|procedure","quote":"exact user words","key":"kebab-case-slot","layer":"workspace","boundary":"when it might not hold"}]}',
 ].join('\n')
 
 /** 系统提示按 episode 来源分叉：压缩那份必须明确排除任务态章节。 */
@@ -199,7 +211,17 @@ export function reviewSystemPromptFor(episode: Episode, cfg: {
       '`layer`: "global" only when it applies to every project or to the user personally; otherwise "workspace". Always pass it.',
       'Write every `text` in the user\'s language. Give every item a short `title` (2-8 words).',
       'At most 3 items. When in doubt, return fewer — a wrong memory is injected into every later conversation.',
-      'Output strict JSON: {"memories":[{"title":"Reply style","text":"the note","kind":"preference|fact|correction|procedure","source":"model_inference","key":"kebab-case-slot","layer":"workspace","boundary":"when it might not hold"}]}',
+      // `kind` 决定保质期（见 `ttlDaysOf`）：`fact` / `procedure` 30 天后提醒复核，
+      // `preference` / `correction` 不过期。不给判据时模型会按字面猜 —— 真实数据里
+      // 「必须重开子代理时先把结论写成简报」被标成 `correction`，于是一条会过期的做法
+      // 永久留在每次对话的上下文里。这里只说四者的分界，不重复上面已说的取舍。
+      '`kind` decides how long the note lives, so pick by what the sentence IS:',
+      '- `preference` — how you should behave or answer (tone, format, language, what to avoid).',
+      '- `correction` — the user fixing a mistake you already made; it names no reusable method.',
+      '- `fact` — something true about this project or machine that cannot be read from the code.',
+      '- `procedure` — a repeatable way of doing something ("when X, do Y first").',
+      'If it tells you how to act in a future situation, it is `procedure`, not `correction`.',
+      'Output strict JSON: {"memories":[{"title":"Reply style","text":"the note","kind":"preference|fact|correction|procedure","key":"kebab-case-slot","layer":"workspace","boundary":"when it might not hold"}]}',
     ].join('\n')
     : TURN_SYSTEM_PROMPT
   return guide === '' ? base : base + '\nWrite every `text` field in this style: ' + guide
@@ -217,6 +239,43 @@ interface BudgetFile {
   sessions: Record<string, { count: number; at: string }>
 }
 
+/**
+ * 预算记录保留多久。
+ *
+ * 这个文件是「每个会话还能复习几次」的账本，键是会话 id —— 而会话本身会不断新建。
+ * 不清的话它只增不减：真实环境里十几天就攒了十几个会话，长年使用会到几千条。
+ *
+ * 30 天足够覆盖任何还在活跃的会话；超期的记录即使留着也没有意义 —— 那个会话的
+ * 复习配额早已用不完，而清掉最多让它重新拥有一次配额（多花一次钱，不会少复习）。
+ */
+const BUDGET_RETENTION_DAYS = 30
+
+/** 丢掉超期的会话记录；返回清理后的账本（没有变化时原样返回同一个对象）。 */
+function pruneBudget(file: BudgetFile, now = Date.now()): BudgetFile {
+  const keys = Object.keys(file.sessions)
+  const kept: BudgetFile['sessions'] = {}
+  let dropped = 0
+  for (const key of keys) {
+    const at = Date.parse(String(file.sessions[key]?.at ?? ''))
+    // 时间戳读不出来时**保留**：删掉一条活会话的记录会让它重新拥有整份配额。
+    if (Number.isFinite(at) && now - at > BUDGET_RETENTION_DAYS * 86400_000) { dropped++; continue }
+    kept[key] = file.sessions[key]!
+  }
+  return dropped === 0 ? file : { sessions: kept }
+}
+
+/** 读一次预算文件；读不到 / 坏了都按空库（计数丢失只会多花一次钱，不会少复习）。 */
+async function readBudget(path: string): Promise<BudgetFile> {
+  try {
+    const raw = JSON.parse(await readFile(path, 'utf8')) as BudgetFile
+    return raw && typeof raw === 'object' && raw.sessions && typeof raw.sessions === 'object'
+      ? { sessions: raw.sessions }
+      : { sessions: {} }
+  } catch {
+    return { sessions: {} }
+  }
+}
+
 export function createReviewBudget(deps: { path: string; max: number; message(e: unknown): string }): ReviewBudget {
   let cache: BudgetFile | null = null
   let loading: Promise<BudgetFile> | null = null
@@ -225,15 +284,8 @@ export function createReviewBudget(deps: { path: string; max: number; message(e:
     if (cache) return cache
     if (loading) return loading
     loading = (async () => {
-      try {
-        const raw = JSON.parse(await readFile(deps.path, 'utf8')) as BudgetFile
-        cache = raw && typeof raw === 'object' && raw.sessions && typeof raw.sessions === 'object'
-          ? { sessions: raw.sessions }
-          : { sessions: {} }
-      } catch {
-        cache = { sessions: {} }
-      }
-      return cache!
+      cache = await readBudget(deps.path)
+      return cache
     })()
     return loading
   }
@@ -258,12 +310,23 @@ export function createReviewBudget(deps: { path: string; max: number; message(e:
       return Math.max(0, cap - used)
     },
     async spend(session) {
-      const file = await load()
-      const hit = file.sessions[session]
+      // **每次都以磁盘为准**，不要用 `load()` 的内存缓存做读-改-写。
+      //
+      // 预算是"这次还能不能花钱"的唯一闸门：缓存 + 整份写回会在两个会话并发复习时互相
+      // 覆盖计数，实际花费能超过 `maxReviewsPerSession`。这里重新读一次文件再写，把窗口
+      // 从"整个进程生命周期"压到"一次读+一次写"。
+      //
+      // 不引入跨进程文件锁：漏计一次最多多花一次钱，而锁本身在热路径上失败会让复习
+      // 整体停摆 —— 代价不对等。
+      const fresh = await readBudget(deps.path)
+      const hit = fresh.sessions[session]
+      const now = Date.now()
+      // 顺手清掉超期会话：这个文件只增不减，而键是不断新建的会话 id。
+      const pruned = pruneBudget(fresh, now)
       const next: BudgetFile = {
         sessions: {
-          ...file.sessions,
-          [session]: { count: (hit ? Math.max(0, Number(hit.count) || 0) : 0) + 1, at: new Date().toISOString() },
+          ...pruned.sessions,
+          [session]: { count: (hit ? Math.max(0, Number(hit.count) || 0) : 0) + 1, at: new Date(now).toISOString() },
         },
       }
       await save(next)
@@ -330,6 +393,8 @@ export function createReviewer(deps: ReviewDeps): {
       const isCheckpoint = typeof episode.checkpoint === 'string' && episode.checkpoint.trim() !== ''
 
       let text = ''
+      /** 失败时记进日志的派发形状；成功路径不读它。 */
+      let dispatchShape: Record<string, unknown> | undefined
       const ac = new AbortController()
       const timer = setTimeout(() => ac.abort(), REVIEW_TIMEOUT_MS)
       try {
@@ -344,15 +409,36 @@ export function createReviewer(deps: ReviewDeps): {
           maxTokens: MAX_OUTPUT_TOKENS,
         })
         const catalogLines = await deps.catalogLines()
-        const stream = prepared.stream({
+        const dispatchOptions = {
           ...prepared.config,
-          messages: [{ role: 'user', content: [{ type: 'text', text: buildReviewPrompt(episode, catalogLines) }] }],
+          messages: [{ role: 'user' as const, content: [{ type: 'text' as const, text: buildReviewPrompt(episode, catalogLines) }] }],
           system: reviewSystemPromptFor(episode, cfg),
           signal: ac.signal,
-        })
+        }
+        // 只在失败时用：宿主逐字段比对派发配置与 `prepared.config`，而它的错误信息
+        // 不带任何字段值。这份快照让日志能直接指出是哪个字段变了。
+        dispatchShape = {
+          sent: pickCallConfig(dispatchOptions),
+          prepared: pickCallConfig(prepared.config),
+        }
+        const stream = prepared.stream(dispatchOptions)
         text = await collectText(stream)
       } catch (e) {
-        await deps.log({ at: new Date().toISOString(), session: episode.session, turn: episode.turn, event: 'review-failed', error: deps.message(e) })
+        // 把派发时的配置快照记下来：宿主只在**字段不一致**时抛
+        // `INVALID_PREPARED_CALL`，而错误信息不带任何一个字段值 —— 没有这份快照，
+        // 日志里只剩一句「config changed」，谁也无法判断是 provider / model /
+        // reasoningEffort / temperature / maxTokens / stop 里的哪一个被改了。
+        //
+        // 只记这六个参与比对的字段（见官方 `callConfigEquals`）：消息正文与 system
+        // 不进日志，那里有用户原文。
+        await deps.log({
+          at: new Date().toISOString(),
+          session: episode.session,
+          turn: episode.turn,
+          event: 'review-failed',
+          error: deps.message(e),
+          ...(dispatchShape !== undefined ? { dispatch: dispatchShape } : {}),
+        })
         return { ok: false, learned: 0, rejected: 0, error: deps.message(e) }
       } finally {
         clearTimeout(timer)
@@ -381,8 +467,8 @@ export function createReviewer(deps: ReviewDeps): {
               ...(item.title !== undefined ? { title: item.title } : {}),
               ...(item.kind !== undefined ? { kind: item.kind } : {}),
               ...(item.key !== undefined ? { key: item.key } : {}),
-              // checkpoint 是转述：不伪造用户原话，也不冒领 user_explicit。
-              source: isCheckpoint ? 'model_inference' : item.source,
+              // checkpoint 是转述，不是用户原话：**不带引句**，门禁自然按推断处理。
+              // 带上了会走引句核对，核不上是硬拒 —— 而它本来就不可能逐字对上。
               ...(!isCheckpoint && item.quote !== undefined ? { quote: item.quote } : {}),
               ...(item.layer !== undefined ? { layer: item.layer } : {}),
               ...(item.boundary !== undefined ? { boundary: item.boundary } : {}),
@@ -413,7 +499,8 @@ export function createReviewer(deps: ReviewDeps): {
                 text: item.text,
                 layer: String(r.layer ?? ''),
                 status: String(r.status ?? ''),
-                confidence: Number(r.confidence) || 0,
+                tier: String(r.tier ?? 'inferred'),
+                ...(typeof r.kind === 'string' ? { kind: r.kind } : {}),
               })
             }
           } else {
@@ -430,6 +517,21 @@ export function createReviewer(deps: ReviewDeps): {
       return { ok: true, learned, rejected, ...(learnedItems.length > 0 ? { items: learnedItems } : {}) }
     },
   }
+}
+
+/**
+ * 参与宿主比对的六个字段（官方 `callConfigEquals` 逐字段比这一组）。
+ *
+ * 抽出来是为了让失败日志能直接指出差异：`undefined` 也保留成显式的 `null`，
+ * 否则 JSON 序列化会把键整个丢掉，"没这个字段"与"值是 undefined"就看不出区别。
+ */
+function pickCallConfig(c: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const key of ['provider', 'model', 'reasoningEffort', 'temperature', 'maxTokens', 'stop']) {
+    const v = c[key]
+    out[key] = v === undefined ? null : Array.isArray(v) ? [...v] : v
+  }
+  return out
 }
 
 /** `cfg.model` 支持 `provider/model` 与裸 model（provider 沿用会话的）。 */

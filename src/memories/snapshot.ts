@@ -12,7 +12,7 @@ import { readdirSync, statSync } from 'node:fs'
 import { cp, lstat, mkdir, readFile, readdir, realpath, rename, rm } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { parseSkillDoc, resolveDshHome, unquote } from '../skills/core.js'
-import { MAX_SOURCE_DEPTH, MAX_DIRECTORIES, MAX_ENTRIES, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, TRUNCATION_MARKER, DROPPED_HEADING, SCENE_MEMORY_NOTE, SCENE_MEMORY_NOTE_PARTIAL, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, SHARED_GROUP, WORKSPACE_GROUP_PREFIX, SESSION_GROUP_PREFIX, LEGACY_AUTO_GROUP, isReservedGroup, byteLen, message, isValidGroupSegment } from './constants.js'
+import { MAX_SOURCE_DEPTH, MAX_DIRECTORIES, MAX_ENTRIES, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, TRUNCATION_MARKER, DROPPED_HEADING, SCENE_MEMORY_NOTE, SCENE_MEMORY_NOTE_PARTIAL, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, SHARED_GROUP, WORKSPACE_GROUP_PREFIX, SESSION_GROUP_PREFIX, LEGACY_AUTO_GROUP, WORKSPACE_MEMORY_HEADING, isReservedGroup, byteLen, message, isValidGroupSegment } from './constants.js'
 import { ensureSceneRecords, resolveActiveScenes, signatureOfIndex, sceneLabel, sceneHeading, sceneLine, compareSceneBuckets, memoryBlock } from './projection.js'
 import { isIndexQuarantined, readIndex, writeIndex, pathExists, readFileOrThrowSync, isAbsentError } from './index-io.js'
 import type { RuleIndexEntry } from './index-io.js'
@@ -383,21 +383,47 @@ export function probeSceneFilesSync(
   }
 
   // 一级目录 = 场景（根层的裸 .md 不再是记忆，故此处不处理文件）。
-  // 保留组里只有 `_shared` 进这份 probe：`_ws` / `_session` / `_auto` 是自动记忆的层，
-  // 由自动段单独渲染（读 catalog，不读正文）。把它们扫进来有两个坏处：每次自动写入都会
-  // 改变记忆段指纹（整段重发），以及它们会以 `## Scene: _ws` 的形式混进用户记忆段。
-  const autoOnlyGroups = new Set([WORKSPACE_GROUP_PREFIX, SESSION_GROUP_PREFIX, LEGACY_AUTO_GROUP])
+  //
+  // 有两类一级目录**不是场景**，必须在这里挡掉：
+  //
+  //   · `_session` / `_auto`：自动记忆的层，由自动段读 catalog 单独渲染（不读正文）。
+  //     扫进来有两个坏处：每次自动写入都会改变记忆段指纹（整段重发），以及它们会以
+  //     `## Scene Memories: _session` 的形式混进用户记忆段。
+  //   · `_ws`：用户手写的工作区记忆，由下面的③单独扫、`renderWorkspaceMemory` 单独成段。
+  //     漏挡这一条会让 `walk` 以 `_ws` 当场景名收一遍，refs 里那条的 `scene` 就是 `_ws`
+  //     而不是 `_ws/<hash16>` —— 而 `renderWorkspaceMemory` 按后者精确比对，于是永远
+  //     匹配不上、整段渲染为空。工作区记忆一条都注入不进去，且没有任何报错。
+  const nonSceneGroups = new Set([SESSION_GROUP_PREFIX, LEGACY_AUTO_GROUP, WORKSPACE_GROUP_PREFIX])
   for (const item of [...rootEntries].sort((a, b) => a.name.localeCompare(b.name))) {
     if (item.name.startsWith('.')) continue
     if (item.isSymbolicLink()) continue
     if (!item.isDirectory()) continue
-    if (autoOnlyGroups.has(item.name)) continue
+    if (nonSceneGroups.has(item.name)) continue
     if (!isValidGroupSegment(item.name)) continue // 非法目录名 → 不作为场景
     scenes.push(item.name)
   }
 
   // ② 场景目录树
   for (const scene of scenes) walk(scene, join(memoriesRoot, scene), '', 1)
+
+  // ③ 工作区记忆：`_ws/<hash16>` 是**用户手写**的工作区记忆，与自主笔记不同根
+  //    （自主笔记住 `evolution/notes/_ws/<hash>`，由自动段读 catalog 渲染）。
+  //
+  //    它们不进 `scenes`：工作区不是场景，进了场景列表就会以 `## Scene Memories: _ws/3f2a` 出现，
+  //    也会被 `resolveActiveScenes` 当成可选场景。这里只把条目挂到 refs 上，由
+  //    `renderWorkspaceMemory` 单独成段 —— 与「全局记忆不是场景」同一个处理方式。
+  const wsRoot = join(memoriesRoot, WORKSPACE_GROUP_PREFIX)
+  let wsDirs: import('node:fs').Dirent[] = []
+  try {
+    wsDirs = readdirSync(wsRoot, { withFileTypes: true })
+  } catch (e) {
+    if (!isAbsentError(e)) throw e
+  }
+  for (const item of wsDirs.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (item.name.startsWith('.') || item.isSymbolicLink() || !item.isDirectory()) continue
+    if (!isValidGroupSegment(item.name)) continue
+    walk(`${WORKSPACE_GROUP_PREFIX}/${item.name}`, join(wsRoot, item.name), '', 1)
+  }
 
   const refs = [...byId.values()].sort((a, b) => a.id.localeCompare(b.id))
   // 指纹必须含会话覆盖：同一份磁盘 + 两个会话的两份不同覆盖 = 两段不同的正文，
@@ -448,19 +474,29 @@ export function renderSceneMemory(
   }
 
   const { active } = resolveActiveScenes(index, probe.scenes, sceneOverride)
+  /**
+   * 分组键：`_shared` 并进 `global`。
+   *
+   * 两者是同一个东西 —— 恒常生效、不属于"当前场景"。分开渲染会让模型看到
+   * `## Always-on memories` 与 `## Scene Memories: _shared` 两个标题，然后自己猜后者是不是一个
+   * 叫 `_shared` 的场景；而界面上它一直显示为「全局」。合并不是删数据：目录与条目原样保留，
+   * 只是不再单独起一个标题。
+   */
+  const bucketOf = (scene: string): string => (scene === SHARED_GROUP ? GLOBAL_SCENE : scene)
   const buckets = new Map<string, SceneMemoryFile[]>()
   for (const file of files) {
-    // 保留组不是场景：`_shared` 是恒常基线（保留在记忆段），`_ws` / `_session` / `_auto`
-    // 由自动段单独渲染。probe 已经把它们挡在外面，这里是第二道保险（防止 refs 从缓存来）。
+    // 保留组不是场景：`_shared` 并进全局块（见 `bucketOf`），`_ws` 由 `renderWorkspaceMemory`
+    // 单独成段（它只在本项目成立，不属于「当前重要记忆」），`_session` / `_auto` 归自动段。
     if (file.scene !== GLOBAL_SCENE && file.scene !== SHARED_GROUP && isReservedGroup(file.scene)) continue
-    // 保留场景 global 恒定生效（「全局」= 任何对话都注入）；其余由 index.active 决定。
+    // 保留场景 global / _shared 恒定生效（「全局」= 任何对话都注入）；其余由 index.active 决定。
     if (file.scene !== GLOBAL_SCENE && !active.has(file.scene)) continue
     // ⚠️ 这里**不再**看场景档案的 memories 段：记忆的开关是**单一真相源** `rules[*].enabled`
     // （见下方 enabled 判定）。档案弹窗里的记忆勾选就是同一个值，所以两边天然一致，
     // 不存在「记忆页开了、档案页还显示未开」的两套状态。
-    const list = buckets.get(file.scene)
+    const bucket = bucketOf(file.scene)
+    const list = buckets.get(bucket)
     if (list) list.push(file)
-    else buckets.set(file.scene, [file])
+    else buckets.set(bucket, [file])
   }
 
   // ── 候选块（确定性顺序：场景 → 场景内 order/名称）────────────────────────
@@ -481,7 +517,7 @@ export function renderSceneMemory(
         header,
         block,
         inline,
-        item: { id: file.id, scene: file.scene, name: file.name, bytes: byteLen(block) },
+        item: { id: file.id, scene: bucketOf(file.scene), name: file.name, bytes: byteLen(block) },
       })
     }
   }
@@ -490,7 +526,7 @@ export function renderSceneMemory(
   }
 
   /**
-   * 选中块 → 段正文（同一场景的 `## Scene: x` 只在首次出现时发出）。
+   * 选中块 → 段正文（同一场景的 `## Scene Memories: x` 只在首次出现时发出）。
    *
    * 授权语**两版**：不截断时带
    * "this is the complete set"，截断时去掉 —— 否则段首的完整性与段尾的 `## Not injected` 直接
@@ -523,7 +559,7 @@ export function renderSceneMemory(
     //
     // 位置（用户对照其他五域的版式定的）：五个域的说明句现在都收在**正文之后** —— 模型先读
     // 条目、紧接着读到"这些条目是什么、怎么用"。此前它在最前（更早还跟每个场景块各来一遍，
-    // 2 个场景就是 272 B ≈68 tok/轮），唯一要求是别夹在 `## Scene: X` 与条目之间把分组和
+    // 2 个场景就是 272 B ≈68 tok/轮），唯一要求是别夹在 `## Scene Memories: X` 与条目之间把分组和
     // 内容隔开 —— 收尾两全：板块级只出现一次，也不隔开任何东西。
     //
     // 句式随之从"引入"改"收束"：原句以冒号结尾（`…this is the complete set:**:`）引出清单，
@@ -629,10 +665,97 @@ export function renderSceneMemory(
     blocks: selected.map((c) => ({
       id: c.item.id,
       scene: c.item.scene,
-      // 与全量块的 `##` 标题逐字一致：全局桶是 `Always-on memories`，其余是 `Scene: <名>`。
-      group: c.item.scene === GLOBAL_SCENE ? 'Always-on memories' : `Scene: ${sceneLabelOf(c.item.scene)}`,
+      // 与全量块的 `##` 标题逐字一致：全局桶是 `Always-on memories`，其余是 `Scene Memories: <名>`。
+      group: c.item.scene === GLOBAL_SCENE ? 'Always-on memories' : `Scene Memories: ${sceneLabelOf(c.item.scene)}`,
       name: c.item.name,
       block: c.block,
+    })),
+  }
+}
+
+/**
+ * 工作区记忆段：`_ws/<hash16>` 下的**用户手写**条目，只在本项目成立。
+ *
+ * 与「当前重要记忆」（全局 + 场景 + 自主全局）分开成一条消息：它们的适用面不同 ——
+ * 一条"这个仓库用 pnpm"混进"任何对话都成立"的块里，模型会把它当成通用规则。
+ *
+ * 只渲染 `workspaceGroup` 指定的那一个工作区（调用方按本会话的 cwd 算出来）。工作区在磁盘上
+ * 可能有很多个（用户换过项目），全渲染等于把别的项目的约定塞进来。
+ *
+ * @param probe 第一相产物；只用其中的 refs。
+ * @param workspaceGroup 目标组（`_ws/<hash16>`）；空串 = 本会话没有工作区身份，整段不注入。
+ * @param maxBytes 本段可用的字节。
+ * @returns 与场景记忆同形的投影；`workspaceGroup` 为空或该组没有条目时返回空段。
+ */
+export function renderWorkspaceMemory(
+  probe: { refs: SceneFileRef[]; truncated: boolean },
+  workspaceGroup: string,
+  maxBytes: number,
+): SceneMemoryProjection {
+  const empty: SceneMemoryProjection = {
+    text: '', body: '', tail: '', bytes: 0, truncated: false,
+    maxBytes, scenes: [], items: [], dropped: [], blocks: [],
+  }
+  if (workspaceGroup === '') return empty
+  const files: SceneMemoryFile[] = []
+  for (const ref of probe.refs) {
+    if (ref.scene !== workspaceGroup) continue
+    const text = readFileOrThrowSync(ref.path)
+    if (text === null) continue
+    const doc = parseSkillDoc(text) as ParsedSkillDoc
+    const derived = deriveFromDoc(
+      { id: ref.id, group: ref.scene, name: ref.name, kind: ref.kind, docPath: ref.path, entryPath: ref.path },
+      doc,
+    )
+    files.push({
+      id: ref.id,
+      scene: ref.scene,
+      name: derived.name,
+      order: ref.order,
+      body: doc.body,
+      kind: ref.kind,
+      bundleDir: ref.kind === 'bundle' ? dirname(ref.path) : '',
+    })
+  }
+  if (files.length === 0) return empty
+  files.sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))
+
+  const marker = `\n${TRUNCATION_MARKER}\n`
+  const noteBytes = byteLen(`${SCENE_MEMORY_NOTE}\n\n`)
+  const kept: SceneMemoryFile[] = []
+  const missed: SceneMemoryFile[] = []
+  let used = noteBytes
+  for (const file of files) {
+    const { text: block } = memoryBlock(file)
+    const cost = byteLen(block) + 1
+    if (used + cost + marker.length > maxBytes) { missed.push(file); continue }
+    kept.push(file)
+    used += cost
+  }
+  const blocks = kept.map((f) => memoryBlock(f).text)
+  let body = blocks.join('')
+  if (missed.length > 0) {
+    body += `\n${TRUNCATION_MARKER} ${missed.length} more workspace memory(ies) not shown; list them with memory_get.\n`
+  }
+  if (body === '') return { ...empty, truncated: probe.truncated || missed.length > 0 }
+  const note = missed.length > 0 || probe.truncated ? SCENE_MEMORY_NOTE_PARTIAL : SCENE_MEMORY_NOTE
+  const text = `${body}\n${note}\n`
+  return {
+    text,
+    body,
+    tail: '',
+    bytes: byteLen(text),
+    truncated: probe.truncated || missed.length > 0,
+    maxBytes,
+    scenes: [workspaceGroup],
+    items: kept.map((f) => ({ id: f.id, scene: f.scene, name: f.name, bytes: byteLen(memoryBlock(f).text) })),
+    dropped: missed.map((f) => ({ id: f.id, scene: f.scene, name: f.name, bytes: byteLen(memoryBlock(f).text) })),
+    blocks: kept.map((f) => ({
+      id: f.id,
+      scene: f.scene,
+      group: WORKSPACE_MEMORY_HEADING,
+      name: f.name,
+      block: memoryBlock(f).text,
     })),
   }
 }

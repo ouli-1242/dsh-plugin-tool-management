@@ -35,6 +35,16 @@ export interface MemoriesDeps {
   /** 场景记忆段预算上限（字节），默认 65536。 */
   maxBytes?: number
   /**
+   * 已登记的工作区清单（`hash16` → 显示名 / 目录是否还在）。
+   *
+   * 只给界面用：`_ws/<hash16>` 那几节要写项目名而不是 hash 前 8 位，「新建记忆」也只该
+   * 把还活着的工作区列进落点。本域自己不读 `evolution/workspaces.json` —— 那份侧车的
+   * 读模型归自动记忆域（`evolution/config.ts`），两处各读一份迟早分家。
+   *
+   * 不提供时界面退回 hash 短码；返回空数组等价于「一个工作区都没有」。
+   */
+  workspacesOf?: () => Promise<Array<{ hash: string; label: string; missing: boolean }>>
+  /**
    * 某个会话的记忆域覆盖：`scope-overrides.json` 的读取由调用方注入
    * 本域不自己引 `scope/store.ts` —— 那份侧车有自己的 TTL 缓存，两处各读一份时过期
    * 时刻不同步，界面与注入会各说各话。`undefined` = 没有覆盖 = 全局口径。
@@ -104,8 +114,6 @@ export interface Rule {
   autoKey?: string
   /** 生命周期（`auto_status`）：candidate / active / core / superseded / archived。 */
   autoStatus?: string
-  /** 置信度（`auto_confidence`）：反规范化值，真值在 evolution/state.json。 */
-  autoConfidence?: number
   /** 归属：工作区 hash16 / 场景名（`auto_workspace` / `auto_scene`）。 */
   autoWorkspace?: string
   autoScene?: string
@@ -192,11 +200,32 @@ export interface MemoriesService {
    */
   memoryProjection: (scope?: MemoryScopeOverride) => SceneMemoryProjection
   /**
+   * 工作区记忆段文本：`_ws/<hash16>` 下的用户手写条目，只在本项目成立。
+   *
+   * @param workspaceGroup 目标组（`_ws/<hash16>`）；空串 = 本会话没有工作区身份 → 空串。
+   * @param scope 会话覆盖（逐条开关与缓存分桶）。
+   * @returns 段正文；空串 = 该工作区没有记忆。读失败抛异常（与 `memoryText` 同口径）。
+   */
+  workspaceMemoryText: (workspaceGroup: string, scope?: MemoryScopeOverride, budgetBytes?: number) => string
+  /**
+   * 工作区记忆段的完整投影（正文 + 逐条块）。与 `workspaceMemoryText` 同源；
+   * 合并注入块要拿 `body` 与 `blocks`，不能从 `text` 反剥收尾句。
+   */
+  workspaceMemoryProjection: (workspaceGroup: string, scope?: MemoryScopeOverride, budgetBytes?: number) => SceneMemoryProjection
+  /**
    * 场景段文本（`scene-manager-catalog`）：**启用的场景 + 场景说明**（约定）。
    * 与记忆段是两个独立注入段，各自去重、各自可被关掉（见 snapshot.ts 的 renderSceneCatalog）。
    * 与 `memoryText` 同口径：读失败抛异常。
    */
   sceneCatalogText: (scope?: MemoryScopeOverride) => string
+  /**
+   * 「场景说明 + 该场景的记忆」合并投影：场景段的正文在前，场景记忆的正文紧跟其后。
+   *
+   * 注入侧用这一个，不用 `sceneCatalogText` + `memoryProjection` 各拼一次 —— 两者合成
+   * 一条消息，模型读到的顺序才是「在哪个场景 → 这个场景记了什么」。
+   * 与 `memoryText` 同口径：读失败抛异常。
+   */
+  sceneWithMemoryProjection: (scope?: MemoryScopeOverride) => SceneMemoryProjection
   /**
    * 全局提示词正文（注入兜底用；官方 agent-instructions 行没挂时才被取用）：
    * 场景期间 = 当前场景绑定的提示词，否则 = `~/.dsh/AGENTS.md` 正文。

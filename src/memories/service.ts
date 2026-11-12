@@ -87,7 +87,7 @@ import {
   DROPPED_HEADING, GLOBAL_SCENE, GLOBAL_SCENE_LABEL, INDEX_VERSION, INLINE_BODY_MAX, LEGACY_BUNDLE_DOC,
   MAX_ATTACH_ENTRIES, MAX_ATTACH_ENTRY_BYTES, MAX_ATTACH_TOTAL_BYTES, MAX_DESCRIPTION_LENGTH,
   MAX_DIRECTORIES, MAX_ENTRIES, MAX_GROUP_SEGMENT_LENGTH, MAX_SOURCE_DEPTH,
-  SCENE_CATALOG_MAX_BYTES, SEGMENT_RULE_HINT, SHARED_GROUP, SNAPSHOT_TTL_MS,
+  SCENE_CATALOG_MAX_BYTES, SCENE_MEMORY_NOTE, SCENE_MEMORY_NOTE_PARTIAL, SEGMENT_RULE_HINT, SHARED_GROUP, SNAPSHOT_TTL_MS,
   TRUNCATION_MARKER, isValidGroupPath, isValidGroupSegment, message, MEMORIES_TRASH_DIR, fail,
 } from './constants.js'
 // 对外契约保持在原路径：本文件此前直接 export 这两个，index.ts 等已按此 import。
@@ -105,7 +105,7 @@ import {
 // 索引 IO 组与发现/快照组（抽出）。
 import { writeFileAtomically, writeFileAtomicBinary, isIndexQuarantined, readIndex, readIndexSync, writeIndex, repairFromQuarantine, sceneRecordOf, normalizeScenePromptId, pathExists, isAbsentError } from './index-io.js'
 import type { SceneIndexEntry, RuleIndexEntry, GroupIndexEntry } from './index-io.js'
-import { deriveFromDoc, projectRule, relocateLegacyLayout, buildSnapshot, probeSceneFilesSync, renderSceneCatalog, renderSceneMemory } from './snapshot.js'
+import { deriveFromDoc, projectRule, relocateLegacyLayout, buildSnapshot, probeSceneFilesSync, renderSceneCatalog, renderSceneMemory, renderWorkspaceMemory } from './snapshot.js'
 import { buildCatalog, catalogPathOf } from './catalog.js'
 import { autoNotesRootOf, migrateLegacyAutoNotes } from '../evolution/notes.js'
 import { watchDirectories } from '../skills/dir-watch.js'
@@ -219,6 +219,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   const SCENE_CACHE_MAX = 16
   const sceneCache = new Map<string, { signature: string; value: SceneMemoryProjection }>()
   const sceneCatalogCache = new Map<string, { signature: string; value: SceneMemoryProjection }>()
+  const wsCache = new Map<string, { signature: string; value: SceneMemoryProjection }>()
   /** 取一条缓存并把它移到队尾（Map 保序 ⇒ 头部就是最久没用的那条）。 */
   const cacheGet = <T>(cache: Map<string, T>, key: string): T | undefined => {
     const hit = cache.get(key)
@@ -381,6 +382,87 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     }
   }
 
+  /**
+   * 工作区记忆段：`_ws/<hash16>` 下的用户手写条目，只在本项目成立。
+   *
+   * 与场景段分开成一条消息：一条"这个仓库用 pnpm"混进"任何对话都成立"的块里，模型会把它
+   * 当成通用规则。段内容只由本工作区那一组决定，与"当前启用哪个场景"无关。
+   *
+   * @param workspaceGroup 目标组；空串 = 本会话没有工作区身份，整段为空（不注入）。
+   * @param scope 会话覆盖（只影响缓存分桶与逐条开关）。
+   */
+  function workspaceMemory(workspaceGroup: string, scope?: MemoryScopeOverride, budgetBytes?: number): SceneMemoryProjection {
+    if (workspaceGroup === '') return emptySceneMemory()
+    // 预算可以与场景记忆段不同：两块共用一个总盘时，工作区那段只能拿剩下的部分。
+    const limit = Number.isFinite(budgetBytes) && (budgetBytes as number) > 0 ? (budgetBytes as number) : maxBytes
+    const index = readIndexSync(stateDir)
+    assertIndexReadable()
+    const override = { scene: scope?.scene, memory: scope?.memory }
+    const probe = probeWithCache(index, override)
+    const key = 'ws\u0000' + workspaceGroup + '\u0000' + limit + '\u0000' + scopeKeyOf(scope)
+    const hit = cacheGet(wsCache, key)
+    if (hit !== undefined && hit.signature === probe.signature) return hit.value
+    const value = renderWorkspaceMemory(probe, workspaceGroup, limit)
+    cacheSet(wsCache, key, { signature: probe.signature, value })
+    return value
+  }
+
+  /**
+   * 「场景 + 场景记忆」合并段：场景说明行紧跟着它的记忆条目，同一个域发出去。
+   *
+   * 为什么合并：场景说明回答「现在在哪个场景、这个场景是干什么的」，场景记忆是「这个场景下
+   * 记了哪些条目」—— 两者是同一个问题的框架与内容。拆成两个域时模型读到的顺序是
+   * 「场景说明 …（隔一段全局记忆）… 场景记忆」，中间夹着任何别的东西都会让 `## Scene Memories: X`
+   * 与它的说明分成两处，模型得自己回头对齐。
+   *
+   * 全局记忆与自主·全局仍留在 `memoryGlobal` 域：它们在**任何**对话里都成立，不属于某个
+   * 场景，混进来会让「全局」与「本场景」的边界消失。
+   *
+   * 预算：场景说明行固定先扣，剩下的给条目 —— 说明是框架，永远该在场。
+   */
+  function sceneWithMemoryProjection(scope?: MemoryScopeOverride): SceneMemoryProjection {
+    const catalog = sceneCatalog(scope)
+    const memory = memoryProjection(scope)
+    // 只取**非全局桶**的条目：全局记忆留在 `memoryGlobal` 域（它在任何对话里都成立，
+    // 不属于某个场景）。留着会让这一域的顺序变成「场景说明 → 全局记忆 → 场景记忆」，
+    // 场景说明与它的条目又被隔开 —— 那正是这次要修的东西。
+    const sceneBlocks = memory.blocks.filter(function (b) { return b.scene !== GLOBAL_SCENE })
+    // 没有启用任何场景（catalog 为空）→ 这一域没有任何东西可发。
+    // 不退回整段记忆：全局记忆归 `memoryGlobal`，两边都发会让它出现两遍。
+    if (catalog.text === '' || sceneBlocks.length === 0) {
+      if (catalog.text === '') return { text: '', body: '', tail: '', bytes: 0, truncated: catalog.truncated, maxBytes: catalog.maxBytes, scenes: [], items: [], dropped: [], blocks: [] }
+    }
+    // 场景说明行在前，该场景的条目紧跟其后：先读「在哪个场景」，再读这个场景记了什么。
+    const catalogText = catalog.text.replace(/\s+$/, '')
+    // 逐块重建正文：`blocks[].block` 只有条目本身，分组标题在 `group` 里（`Scene Memories: <名>`）。
+    // 同一个场景的标题只在**首条**出现 —— 与 `renderSceneMemory` 的 `header` 语义一致。
+    const chunks: string[] = []
+    let lastGroup: string | null = null
+    for (const b of sceneBlocks) {
+      if (b.group !== lastGroup) {
+        lastGroup = b.group
+        chunks.push('## ' + b.group)
+      }
+      chunks.push(b.block)
+    }
+    const body = chunks.join('\n\n').replace(/\n{3,}/g, '\n\n')
+    const parts: string[] = [catalogText]
+    if (body !== '') parts.push(body)
+    const note = catalog.truncated || memory.truncated ? SCENE_MEMORY_NOTE_PARTIAL : SCENE_MEMORY_NOTE
+    const text = parts.join('\n\n') + '\n\n' + note
+    return {
+      text,
+      body: parts.join('\n\n'),
+      tail: '',
+      bytes: byteLen(text),
+      truncated: catalog.truncated || memory.truncated,
+      maxBytes: catalog.maxBytes,
+      scenes: catalog.scenes,
+      items: memory.items.filter(function (it) { return it.scene !== GLOBAL_SCENE }),
+      dropped: memory.dropped.filter(function (it) { return it.scene !== GLOBAL_SCENE }),
+      blocks: sceneBlocks,
+    }
+  }
   /** 场景段：只有注入侧一个消费者，直接按注入口径（读失败抛）。 */
   function sceneCatalog(scope?: MemoryScopeOverride): SceneMemoryProjection {
     const index = readIndexSync(stateDir)
@@ -892,6 +974,8 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
   //     **不判"与文件重复"** —— 预设挂了官方 agent-instructions 时那份正文已经由文件送达
   //     （注入侧会跳过整个域），没挂时（极简）才需要注入兜底；判定在注入器的 `selectInjections` 里。
   const memoryProjection = (scope?: MemoryScopeOverride): SceneMemoryProjection => requireSceneMemory(scope)
+  const workspaceMemoryText = (group: string, scope?: MemoryScopeOverride, budgetBytes?: number): string => workspaceMemory(group, scope, budgetBytes).text
+  const workspaceMemoryProjection = (group: string, scope?: MemoryScopeOverride, budgetBytes?: number): SceneMemoryProjection => workspaceMemory(group, scope, budgetBytes)
   const memoryText = (scope?: MemoryScopeOverride): string => memoryProjection(scope).text
   // 场景段。与记忆段是**两次探测**：`probeSceneFilesSync` 没有内部缓存（signature 本身就是
   // 扫描的结果，缓存不了），代价是有界的一次目录树 stat（**不读正文**），换来两段各自渲染、
@@ -1097,6 +1181,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     ...(deps.skillsTrashDir ? { skillsTrashDir: deps.skillsTrashDir } : {}),
     snapshot, invalidateSnapshot, sceneMemory, scenePrompt,
     scopeOverrideOf: (sessionId: string) => deps.scopeOverrideOf?.(sessionId),
+    ...(deps.workspacesOf === undefined ? {} : { workspacesOf: deps.workspacesOf }),
     parseId, locateRule, refuseOutsideRoot, buildProjected, sceneRows,
     copyIntoMemoriesTrash, listAttachments, serializeRuleFile, serializeUpdatedFile,
     ensureLayout, presetExistsSync,
@@ -1177,6 +1262,9 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     writeOps,
     memoryText,
     memoryProjection,
+    sceneWithMemoryProjection,
+    workspaceMemoryText,
+    workspaceMemoryProjection,
     sceneCatalogText,
     promptText,
     promptFiles,
@@ -1218,7 +1306,7 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
         }
       },
       memoriesRoot,
-      /** 自主记忆自己的根目录（装配 learner / dreamer 时传它，别再传 memoriesRoot）。 */
+      /** 自主记忆自己的根目录（装配 learner 时传它，别再传 memoriesRoot）。 */
       autoNotesRoot,
       stateDir,
       // 自动段与手写段共用同一个盘：两块都进同一次对话的上下文，各算一份就没人说得清

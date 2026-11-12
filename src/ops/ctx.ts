@@ -45,6 +45,16 @@ export interface MemoriesOpsCtx {
   refuseOutsideRoot(target: string): Promise<{ ok: false; error: string; code: string } | null>
   buildProjected(id: string): Promise<Rule | null>
   sceneRows(snap: Snapshot, index: RulesIndex, override?: string | null): SceneRow[]
+  /**
+   * 已登记的工作区：`hash16` → 显示名与是否还在盘上。
+   *
+   * 记忆页要给 `_ws/<hash16>` 那几节写人话名称（此前只有 hash 前 8 位，用户看不出是哪个
+   * 项目），并**只列还活着的工作区**给「新建记忆」选 —— 归档 / 目录已删的那些不该出现在
+   * 落点里，否则用户会往一个再也打不开的项目里写记忆。
+   *
+   * 读不到（没接自动记忆 / 文件坏了）时返回空表：界面退回 hash 短码，不静默改落点。
+   */
+  workspacesOf?(): Promise<Array<{ hash: string; label: string; missing: boolean }>>
 
   // 写侧辅助
   copyIntoMemoriesTrash(located: DiscoveredEntry, group: string, name: string): Promise<string>

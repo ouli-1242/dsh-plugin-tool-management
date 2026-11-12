@@ -19,6 +19,7 @@ import { checkpointEpisodeOf } from './digest.js'
 import type { EpisodeStore, OutboxItem } from './episodes.js'
 import type { EffectiveEvolutionConfig } from './config.js'
 import { MAX_REVIEW_ATTEMPTS, outboxFailed, type createReviewer } from './review.js'
+import { noteCompaction } from './runtime.js'
 
 export interface ColdPathDeps {
   /** 每会话的生效配置（异步：要读三级开关文件）。 */
@@ -70,6 +71,10 @@ const TAIL_SHARE = 0.5
 
 /**
  * 官方 `compaction/summary` 的 `data.summary`：只取 text 块拼成纯文本。
+ *
+ * 这里**不需要**剥 `<compacted-summary>` 标签：官方事件里的 `summary` 是模型原始输出
+ * （`summarizer.ts` 的 `summary = summaryText(rawOutput)`），标签由 `frameSummary()` 加在
+ * **替换消息**上，两处是不同字段。剥标签反而会把用户真正写过的同名标签当成框架吃掉。
  *
  * 超限时**保头也保尾、砍中间**。官方的 `COMPACTION_INSTRUCTION` 章节顺序是
  * Primary Request → Key Technical Concepts → Files and Code → Errors → Pending →
@@ -288,23 +293,30 @@ export function createColdPath(deps: ColdPathDeps): ColdPathHandle {
     compactionSummary: handleCompaction,
 
     async replay() {
+      const now = Date.now()
       const all = await deps.episodes.list()
       const targets = all.filter((x) => x.status === 'pending'
         || (x.status === 'failed' && (x.attempts ?? 0) <= MAX_REVIEW_ATTEMPTS))
+        // **退避要认**：`nextAt` 是失败后算出来的「最早什么时候可以再试」。启动重放
+        // 不看它就等于把退避整个作废 —— 一分钟内重启三次，一条本该 30 分钟后才重试的项
+        // 会被烧成 dead-letter，而它可能只是模型那一次超时。
+        .filter((x) => x.nextAt === undefined || x.nextAt <= now)
       let done = 0
       let failed = 0
       for (const item of targets) {
-        const ep = await deps.episodes.read(item.path)
-        const cfg = await deps.effectiveOf(item.session, ep?.cwd)
-        if (!cfg.enabled) continue
-        try {
-          const r = await reviewOne(item, cfg)
-          if (r === 'done') done++
-          else failed++
-        } catch (e) {
-          failed++
-          await deps.log({ at: new Date().toISOString(), session: item.session, turn: item.turn, event: 'replay-failed', error: deps.message(e) })
-        }
+        // **每条都排进该会话的串行链**，不要在这里直接调 `reviewOne`。
+        //
+        // 启动重放与实时压缩走的是同一条会话：直接调会让两边同时复习同一个 episode，
+        // 结果是两次模型调用、预算双计、同一条笔记被写两遍（第二条撞门禁报「已存在」）。
+        let outcome: string = 'failed'
+        await enqueue(item.session, async () => {
+          const ep = await deps.episodes.read(item.path)
+          const cfg = await deps.effectiveOf(item.session, ep?.cwd)
+          if (!cfg.enabled) return
+          outcome = await reviewOne(item, cfg)
+        })
+        if (outcome === 'done') done++
+        else failed++
       }
       return { attempted: targets.length, done, failed }
     },
@@ -398,8 +410,20 @@ export function attachColdPath(
           // 判据复用 `subagentDepthOf`（全仓唯一一份深度口径），不再写第二套。
           // 它读的是 `agent.session.header`，而这里手里拿的已经是 `session` 本身 ——
           // 包一层 `{ session }` 而不是另写一份读 header 的逻辑。
+          //
+          // 只包 `session` 是**够的**：`subagentDepthOf` 的三路判据里，`options.subagentDepth`
+          // 是运行期镜像，`header.origin === 'subagent'` 是持久化硬信号（子会话建出来就写进
+          // 头里，见 `sessions/workspace.ts` 的归档判据），后者单独就足以把深度抬到 1。
+          // 反过来说，如果哪天这个事件也能拿到 agent，应当改成直接传 agent —— 那时三路都用得上。
           if (subagentDepthOf({ session }) >= 1) break
           const cwd = typeof session?.header?.cwd === 'string' ? session.header.cwd : undefined
+          // 压缩把中间几轮折进摘要，而摘要里没有当初注入的记忆正文 —— 差集注入从此建立在
+          // 模型已经不记得的基线上（它看到「+1 条」，却不知道原有的有哪些）。
+          // 记一次代数，让该会话的下一轮注入回全量重发。
+          //
+          // 放在子会话闸门**之后**：子代理的上下文收敛为「角色 + 任务」，回全量只会灌进
+          // 它用不上的父会话记忆。
+          noteCompaction(sid)
           // 不 await：压缩的处理器必须同步返回，复习在后台跑。
           void cold.compactionSummary(sid, seq, data.summary, cwd)
           break

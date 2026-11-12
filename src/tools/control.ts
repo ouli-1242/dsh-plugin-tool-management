@@ -118,7 +118,16 @@ export function buildControlTools(deps: ControlToolDeps): void {
         const action = String((args && args.action) || '').trim()
         const agent = exec && (exec as { agent?: unknown }).agent
         if (action === 'list') return listTools(deps, agent)
-        if (action === 'repair') return repairState(deps, args)
+        // `repair` 也受子代理限制：它改的是**共享**侧车（记忆索引 / 作用域 / 工具表），
+        // 不是本会话的名单。早先它在 `subagentDepth` 判断之前就 return 了，于是子代理能调
+        // 一个破坏性的修复动作去动父会话与所有会话共用的状态 —— 与「子代理不改工具表」
+        // 的承诺正好相反。`list` 仍然放行：读一眼不改变任何状态。
+        if (action === 'repair') {
+          if ((deps.subagentDepth?.(agent) ?? 0) >= 1) {
+            throw new Error('this runs in a subagent, which shares its parent conversation\'s state: repairing a sidecar here would change every conversation. Ask the parent agent (or the user) to run it.')
+          }
+          return repairState(deps, args)
+        }
         if (action !== 'enable' && action !== 'disable') {
           throw new Error('unknown action: ' + (action === '' ? '(missing)' : action) + ' — use list, enable, disable or repair')
         }

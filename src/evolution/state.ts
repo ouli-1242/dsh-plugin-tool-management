@@ -15,7 +15,7 @@
 //     之后被删的记忆会静默复活、被纠正过的错误会重新变成"高置信"。宁可停摆，不可静默。
 //     坏的原文会先备份到 `evolution/state.json.corrupt-<ts>`，正文文件一个不动。
 
-import { mkdir, rename, rm } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { hubPath } from '../hub.js'
 import { writeFileAtomically } from '../memories/index-io.js'
@@ -25,14 +25,53 @@ export const EVOLUTION_STATE_FILE = 'evolution/state.json'
 export const STATE_VERSION = 1
 
 /**
- * 证据来源。权重见 `baseConfidenceOf`：不是"谁说的"，而是"可复核到什么程度"。
+ * 证据来源。**由系统判定，不由模型声明** —— 这是本文件最重要的一条契约。
  *
- * `user_approved` 是确认卡的产物：用户在卡片上看过**这条原文**并按了同意 —— 比模型推断
- * 强得多，但没到"用户自己说的"（user_explicit 要逐字引句核对）那一档。
+ * 模型自报"我验证过"与自报"我有 0.9 的把握"是同一类问题：写的人顺便当裁判。所以
+ * `memory_note` 不再接受 `source` 参数，证据只有三条产生路径：
+ *
+ *   · `user_explicit` —— 模型给了一句引句，且它逐字出现在本会话真实的用户消息里
+ *     （`checkQuote` 做子串核对，模型编不出来）；
+ *   · `user_approved` —— 用户在看得到原文的卡片上点了同意；
+ *   · `model_inference` —— 其余全部。
+ *
+ * `user_correction` / `tool_verified` 只存在于旧数据：它们当年也是模型自报的，
+ * 无法回溯核对，读取时一律按 `model_inference` 计（宁可低估，不要高估）。
  */
 export type EvidenceSource = 'user_explicit' | 'user_correction' | 'tool_verified' | 'model_inference' | 'user_approved'
 
 export const EVIDENCE_SOURCES: readonly EvidenceSource[] = ['user_explicit', 'user_correction', 'tool_verified', 'model_inference', 'user_approved']
+
+/** 可被新写入产生的来源。旧数据里的另外两个只读不写。 */
+export const WRITABLE_EVIDENCE_SOURCES: readonly EvidenceSource[] = ['user_explicit', 'model_inference', 'user_approved']
+
+/**
+ * 证据档位：排序与展示都用它，取代原来的 `confidence` 小数。
+ *
+ * 三档而不是一个 0–1 的数：数看起来能权衡，实际上只由 `source` 一张表换算，多出来的
+ * 精度是假的。三档能直接读懂，也能直接解释"为什么这条排在前面"。
+ */
+export type EvidenceTier = 'confirmed' | 'quoted' | 'inferred'
+
+export const EVIDENCE_TIERS: readonly EvidenceTier[] = ['confirmed', 'quoted', 'inferred']
+
+/** 来源 → 档位。旧数据的两档自报来源归入最弱一档，见 `EvidenceSource` 的说明。 */
+export function tierOfSource(source: EvidenceSource): EvidenceTier {
+  if (source === 'user_approved') return 'confirmed'
+  if (source === 'user_explicit') return 'quoted'
+  return 'inferred'
+}
+
+/** 一组证据里最强的档位。没有证据 = 最弱（`inferred`），不是"没有档位"。 */
+export function tierOf(evidence: readonly EvidenceRef[]): EvidenceTier {
+  let best: EvidenceTier = 'inferred'
+  for (const e of evidence) {
+    const t = tierOfSource(e.source)
+    if (t === 'confirmed') return 'confirmed'
+    if (t === 'quoted') best = 'quoted'
+  }
+  return best
+}
 
 /**
  * 一条证据。
@@ -52,11 +91,17 @@ export interface EvidenceRef {
   at: string
 }
 
+/**
+ * 注入与使用计数。
+ *
+ * 只收**系统能观测到的事实**：进没进过上下文（`injected`）、模型有没有主动拉全文
+ * （`read`）。曾经还有 `helpful` / `harmful` 两项，但全仓没有任何写入路径 —— 它们恒为 0，
+ * 却参与算分与矛盾惩罚，让排序看起来在权衡、实际只按证据类型排。宁可少两个字段，
+ * 也不要一个永远不动的数字冒充信号。
+ */
 export interface EntryCounters {
   injected: number
   read: number
-  helpful: number
-  harmful: number
   lastInjectedAt?: string
   lastUsedAt?: string
 }
@@ -112,17 +157,23 @@ export interface EntryState {
   evidence: EvidenceRef[]
   counters: EntryCounters
   transitions: Transition[]
-  /**
-   * 反规范化的置信度：真值由 `evidence` 算出（`confidenceOf`），这里存一份供界面直读。
-   * 两者不一致时**以 evidence 为准** —— 每次写入都会重算，它只是个缓存。
-   */
-  confidence?: number
   /** 路由降级原因：`no-scene` / `no-workspace` / `scope-too-narrow`。界面据此解释"为什么它在工作区层"。 */
   degraded?: string
   /** 用户编辑过 = 锁定：自动路径从此只能提议，不能覆盖正文。 */
   locked?: boolean
-  /** 需要用户裁决的原因（与用户记忆冲突 / 表述有歧义）。有值 = 不注入，等确认。 */
-  needsReview?: string
+  /**
+   * 待用户裁决的原因（与用户记忆冲突 / 表述有歧义 / 纯推断还没被确认）。
+   * **有值 = 不注入**，等用户确认后才算数。
+   */
+  pendingReason?: string
+  /**
+   * 复核提醒（TTL 到期）。**有值仍然照常注入** —— 只是告诉用户"这条有点旧了，看一眼"。
+   *
+   * 与 `pendingReason` 分开是本文件修掉的一个静默失效：两者曾共用一个 `needsReview`
+   * 字段，而注入侧见它非空就跳过，于是维护扫描一挂 TTL 提醒，一条仍在生效的记忆就从
+   * 上下文里消失了 —— 界面还显示"生效"、预算还把它算进去。提醒不该等于停用。
+   */
+  reviewDue?: string
   /** 只有 procedure 有：结构化步骤 + 成功/失败计数。 */
   procedure?: ProcedureState
 }
@@ -178,7 +229,7 @@ export const TOMBSTONE_DAYS = 30
 
 export const emptyState = (): EvolutionState => ({ version: STATE_VERSION, entries: {}, tombstones: [], watermarks: {} })
 
-export const emptyCounters = (): EntryCounters => ({ injected: 0, read: 0, helpful: 0, harmful: 0 })
+export const emptyCounters = (): EntryCounters => ({ injected: 0, read: 0 })
 
 const str = (v: unknown, fallback = ''): string => (typeof v === 'string' ? v : fallback)
 const num = (v: unknown, fallback = 0): number => (typeof v === 'number' && Number.isFinite(v) ? v : fallback)
@@ -201,10 +252,40 @@ function normalizeEvidence(raw: any): EvidenceRef[] {
       quote,
       at: str(item.at),
     })
-    // 单条证据不设上限，但一个条目的证据超过 50 条时只留最近的：再多也不改变置信度。
-    if (out.length >= 50) break
+    // 一个条目的证据超过 50 条时只留**最近的**：再多也不改变档位（档位只看最强的来源）。
+    // 这里 `break` 留的是数组最前面那 50 条 —— 那是最旧的。写入侧 `applyOutcome` 已经用
+    // `.slice(-50)` 兜住了，所以只有手工编辑 / 旧数据会走到这条；但它必须与注释一致，
+    // 否则"留最近的"变成"留最旧的"，证据链会停在最早那几条上。
+    if (out.length >= 50) out.shift()
   }
   return out
+}
+
+/**
+ * 旧 `needsReview` → 两个新字段。
+ *
+ * 迁移判据只有状态：候选的理由是"等你裁决"（不该注入），其余（生效中 / 已归档）的理由
+ * 只能是 TTL 复核提醒（该继续注入）。旧数据里没有别的原因会挂在非候选条目上 ——
+ * 冲突与歧义都会把条目压成候选。
+ *
+ * ⚠️ 状态只能从 state 条目自己的 `auto_status` 读：`normalizeEntry` 拿不到笔记文件。
+ * 而**历史 state.json 并不写这个键**，于是实际效果是「旧 `needsReview` 一律归待裁决」。
+ * 这与当时的真实数据一致（带旧字段的条目都是候选），但方向上偏保守：把一条生效中的
+ * 记忆误判成待裁决会让它不再注入，而反向误判只是多一条复核提醒。真要区分，得让调用方
+ * 把笔记状态传进来 —— 那时改这里。
+ */
+function splitReviewFields(raw: any): { pendingReason?: string; reviewDue?: string } {
+  const legacy = typeof raw.needsReview === 'string' && raw.needsReview !== '' ? raw.needsReview : ''
+  const pending = typeof raw.pendingReason === 'string' && raw.pendingReason !== '' ? raw.pendingReason : ''
+  const due = typeof raw.reviewDue === 'string' && raw.reviewDue !== '' ? raw.reviewDue : ''
+  if (pending !== '' || due !== '') {
+    return { ...(pending !== '' ? { pendingReason: pending } : {}), ...(due !== '' ? { reviewDue: due } : {}) }
+  }
+  if (legacy === '') return {}
+  // 状态在 `...raw` 里还没归一化，这里直接看原值：`candidate` 才是待裁决。
+  return raw.auto_status === undefined || raw.auto_status === 'candidate'
+    ? { pendingReason: legacy }
+    : { reviewDue: legacy }
 }
 
 function normalizeEntry(raw: any): EntryState | null {
@@ -230,16 +311,13 @@ function normalizeEntry(raw: any): EntryState | null {
     counters: {
       injected: Math.max(0, num(counters.injected)),
       read: Math.max(0, num(counters.read)),
-      helpful: Math.max(0, num(counters.helpful)),
-      harmful: Math.max(0, num(counters.harmful)),
       ...(typeof counters.lastInjectedAt === 'string' ? { lastInjectedAt: counters.lastInjectedAt } : {}),
       ...(typeof counters.lastUsedAt === 'string' ? { lastUsedAt: counters.lastUsedAt } : {}),
     },
     transitions,
-    ...(typeof raw.confidence === 'number' ? { confidence: raw.confidence } : {}),
     ...(typeof raw.degraded === 'string' && raw.degraded !== '' ? { degraded: raw.degraded } : {}),
     ...(bool(raw.locked) === true ? { locked: true } : {}),
-    ...(typeof raw.needsReview === 'string' && raw.needsReview !== '' ? { needsReview: raw.needsReview } : {}),
+    ...splitReviewFields(raw),
     // 显式归一化：上面的 `...raw` 会把脏的 procedure 原样带进来，界面拿去渲染就会炸。
     ...(normalizeProcedure(raw.procedure) !== undefined ? { procedure: normalizeProcedure(raw.procedure)! } : {}),
   }
@@ -298,39 +376,51 @@ export function normalizeState(raw: any): { ok: true; state: EvolutionState } | 
   }
 }
 
-// ── 置信度 ─────────────────────────────────────────────────────────────────
-
-/**
- * 证据来源的基准分。**不采用模型自报的 confidence** —— 让它自评"我有多确定"等于让写的人
- * 顺便当裁判，实测里 0.9 与 0.6 的区别基本是随机的。这里的分数只看证据类型。
- */
-export const BASE_CONFIDENCE: Record<EvidenceSource, number> = {
-  user_explicit: 0.95,
-  user_correction: 0.9,
-  // 确认卡批下来的：用户看过原文点了同意，但没有逐字引句可核对 —— 夹在 tool_verified
-  // 与 user_correction 之间。没有这张卡（后台复习 / 完全权限跳过）就不会出现这个来源。
-  user_approved: 0.85,
-  tool_verified: 0.8,
-  model_inference: 0.4,
-}
+// ── 档位与排序 ─────────────────────────────────────────────────────────────
 
 /** 独立证据数 = 不同 session 的条数（同一会话里说两遍不算两次独立验证）。 */
 export function independentEvidenceOf(evidence: EvidenceRef[]): number {
   return new Set(evidence.map((e) => e.session || '?')).size
 }
 
+/** 档位 → 排序权重。只用于先后，不对外展示成数字。 */
+const TIER_RANK: Record<EvidenceTier, number> = { confirmed: 3, quoted: 2, inferred: 1 }
+
+/** 展示用的档位名（界面与工具回执共用一份，避免两处措辞不同）。 */
+export const TIER_LABEL: Record<EvidenceTier, string> = {
+  confirmed: 'confirmed',
+  quoted: 'quoted from the user',
+  inferred: 'inferred',
+}
+
 /**
- * 置信度 = 最强证据的基准 + 独立证据加成 − 矛盾惩罚。
+ * 一条自动记忆的排序分。**只用可观测的事实**，按优先级分层：
  *
- * 加成 0.03/条、惩罚 0.15/次：一条纠正（−0.15）要比五次独立复述（+0.12）更重 —— 用户说
- * "不是这样"的时候，重复次数不说明任何问题。上限 0.99 而不是 1.0：留一格表示"没有绝对"。
+ *   ① 证据档位 —— 用户确认过 > 有核对过的原话 > 纯推断；
+ *   ② 命中率 `read / injected` —— 进了上下文之后模型有没有真去拉全文。这是唯一能回答
+ *      "这条占着位置到底有没有用"的信号，而且是系统计数，模型伪造不了；
+ *   ③ 新鲜度 —— 同档同命中率时，近的优先。
+ *
+ * 为什么不用模型自报的 confidence：那是把"写的人"和"裁判"合成一个人。为什么不用
+ * helpful / harmful：它们没有写入路径，恒为 0 —— 留着只会让公式看起来在权衡。
+ *
+ * 命中率用 Laplace 平滑（`(read+1)/(injected+2)`）：只注入过一次又没被读，不该被判成
+ * 0 分；注入 50 次读 0 次才该沉下去。
  */
-export function confidenceOf(evidence: EvidenceRef[], contradictions = 0): number {
-  if (evidence.length === 0) return 0
-  const base = Math.max(...evidence.map((e) => BASE_CONFIDENCE[e.source] ?? 0.4))
-  const independent = independentEvidenceOf(evidence)
-  const raw = base + 0.03 * Math.max(0, independent - 1) - 0.15 * Math.max(0, contradictions)
-  return Math.min(0.99, Math.max(0, Number(raw.toFixed(2))))
+export function scoreOf(
+  entry: { tier: EvidenceTier; updatedAt?: string },
+  counters: EntryCounters,
+  now = Date.now(),
+): number {
+  const tier = TIER_RANK[entry.tier] ?? 1
+  const injected = Math.max(0, counters.injected)
+  const read = Math.max(0, counters.read)
+  const hit = (read + 1) / (injected + 2)
+  const updatedAt = entry.updatedAt ? Date.parse(entry.updatedAt) : Number.NaN
+  const ageDays = Number.isFinite(updatedAt) ? Math.max(0, (now - updatedAt) / 86400_000) : 0
+  // 新鲜度衰减 60 天半衰，权重压到 0.2 —— 它是打破平局用的，不该盖过"有没有被用过"。
+  const fresh = 0.2 * Math.exp(-ageDays / 60)
+  return tier * 10 + hit + fresh
 }
 
 /** 归一化正文 → 墓碑用的指纹。 */
@@ -366,10 +456,36 @@ export function bumpRevision(state: EvolutionState): void {
   state.watermarks.autoRevision = (state.watermarks.autoRevision ?? 0) + 1
 }
 
-/** 清掉过期墓碑；返回是否有变化（调用方据此决定要不要写盘）。 */
+/**
+ * 清掉过期墓碑、合并同引用重复项；返回是否有变化（调用方据此决定要不要写盘）。
+ *
+ * 去重是必须的：写入侧已经做到「同 key 只留一条」，但**存量**是历史上反复 forget 同一
+ * 个 key 攒下来的 —— 每组只差几十毫秒、`until` 几乎相同，留着纯属让 `state.json` 白白
+ * 变大（实测墓碑能占到整份文件的八成以上）。合并时保留**最后一条**：它的 `until` 最晚，
+ * 拦截窗口与原来等价。
+ */
 export function pruneTombstones(state: EvolutionState, now = Date.now()): boolean {
-  const kept = state.tombstones.filter((t) => tombstoneActive(t, now))
-  if (kept.length === state.tombstones.length) return false
+  const kept: Tombstone[] = []
+  const at = new Map<string, number>()
+  for (const t of state.tombstones) {
+    if (!tombstoneActive(t, now)) continue
+    // 没有 key 的墓碑按正文哈希去重；两者都没有的（不该存在）各自独立，不合并。
+    const slot = t.key !== '' ? 'k:' + t.key : t.textHash !== '' ? 'h:' + t.textHash : ''
+    if (slot === '') { kept.push(t); continue }
+    const seen = at.get(slot)
+    if (seen === undefined) { at.set(slot, kept.length); kept.push(t); continue }
+    // 保留 `until` 更晚的那条；`until` 为空 = 永久，优先级最高。
+    const prev = kept[seen]!
+    const prevForever = prev.until === ''
+    const nextForever = t.until === ''
+    if (nextForever || (!prevForever && t.until > prev.until)) kept[seen] = t
+  }
+  if (kept.length === state.tombstones.length) {
+    // 长度没变也可能是同组换了保留项：逐项比一次引用，避免把「合并了但条数相同」漏掉。
+    let same = true
+    for (let i = 0; i < kept.length; i++) if (kept[i] !== state.tombstones[i]) { same = false; break }
+    if (same) return false
+  }
   state.tombstones = kept
   return true
 }
@@ -383,8 +499,13 @@ export interface EvolutionStateDeps {
 }
 
 export interface EvolutionStateStore {
-  /** 读。坏文件返回错误（**不**回默认值）。`missing` 是正常状态，返回空 state。 */
+  /**
+   * 读（1 秒缓存）。只给**读侧**用（界面轮询、诊断）—— 写路径一律用 `readFresh`，
+   * 否则跨进程会拿着最多 1 秒前的旧快照整份写回，覆盖另一个进程刚写的证据与墓碑。
+   */
   read(): Promise<{ ok: true; state: EvolutionState } | { ok: false; error: string }>
+  /** 读（**无缓存**）。所有写路径都必须从这里起手。 */
+  readFresh(): Promise<{ ok: true; state: EvolutionState } | { ok: false; error: string }>
   /** 读（同步快照用）：已缓存则给缓存，否则给空 state 并后台刷新。 */
   cachedSync(): EvolutionState
   /**
@@ -393,34 +514,138 @@ export interface EvolutionStateStore {
    * 串行由调用方保证（op 层已过写队列）；本方法只负责"读坏就不写"和原子落盘。
    */
   update<T>(fn: (state: EvolutionState) => T | Promise<T>): Promise<{ ok: true; result: T } | { ok: false; error: string }>
-  /** 直接把整份 state 写下去（写入管线用）。 */
+  /** 直接把整份 state 写下去（写入管线用）。隔离期间一律拒绝。 */
   write(state: EvolutionState): Promise<{ ok: true } | { ok: false; error: string }>
   /** 直接丢弃内存缓存（写入后让注入侧立刻读回新值）。 */
   invalidateCache(): void
   /** 损坏文件备份到哪（相对 hub）；界面在报错时显示。 */
   corruptBackupPath(): string
+  /** 当前的隔离记录（没有则 null）。界面据此显示"写入已停止"与留存路径。 */
+  quarantined(): Promise<StateQuarantine | null>
+  /** 清掉隔离标记（用户处理完原文件后的显式修复动作）。 */
+  clearQuarantine(): Promise<void>
 }
 
 const CACHE_TTL_MS = 1000
 
+/**
+ * 隔离标记：坏掉的 `state.json` 被留存后写下它，**在此后的所有写路径上 fail-closed**。
+ *
+ * 为什么必须有这个持久闸门：只在"读坏的那一次"返回错误是不够的。文件被搬走后，
+ * 下一次读得到 `missing`，而 `missing` 是全新用户的正常状态 —— 于是任意一次写
+ * （编辑一条笔记、每日维护扫描）都会把一份空状态整份写回，`entries` 与 `tombstones`
+ * 一起清零。墓碑丢了，用户删过的内容会被自动路径重新学回来；证据链丢了，已确认的
+ * 记忆失去"凭什么记"。两者都不可重建。
+ *
+ * 标记只能被显式修复动作清掉（用户处理完原文件后删掉它），不随读成功自动消失。
+ */
+export const STATE_QUARANTINE_FILE = 'evolution/state.quarantine.json'
+
+export interface StateQuarantine {
+  at: number
+  /** 留存的副本绝对路径；复制失败时是原文件路径。 */
+  keptFile: string
+  reason: string
+}
+
 export function createEvolutionState(deps: EvolutionStateDeps): EvolutionStateStore {
   let cache: { at: number; value: EvolutionState } | null = null
+  /** 进程内缓存：持久标记读不到时（磁盘只读等）仍要挡住写入。 */
+  let quarantined: StateQuarantine | null = null
+  let quarantineChecked = false
 
   const absState = (): string => hubPath(EVOLUTION_STATE_FILE)
 
+  function quarantinePath(): string {
+    return hubPath(STATE_QUARANTINE_FILE)
+  }
+
+  async function readQuarantine(): Promise<StateQuarantine | null> {
+    if (quarantineChecked) return quarantined
+    quarantineChecked = true
+    try {
+      const raw = JSON.parse(await readFile(quarantinePath(), 'utf8')) as Partial<StateQuarantine>
+      if (raw && typeof raw === 'object' && typeof raw.keptFile === 'string') {
+        quarantined = {
+          at: Number.isFinite(raw.at) ? Number(raw.at) : 0,
+          keptFile: raw.keptFile,
+          reason: typeof raw.reason === 'string' ? raw.reason : '',
+        }
+      }
+    } catch {
+      // 没有标记 / 读不出来：当作没隔离（标记是保护，不是数据源）。
+    }
+    return quarantined
+  }
+
+  async function writeQuarantine(info: StateQuarantine): Promise<void> {
+    quarantined = info
+    quarantineChecked = true
+    try {
+      await mkdir(hubPath('evolution'), { recursive: true })
+      await writeFileAtomically(quarantinePath(), JSON.stringify({ v: 1, ...info }, null, 2) + '\n', { mode: 0o600 })
+    } catch (e) {
+      // 写标记失败是"保护降级"（进程内仍挡住），不是本次操作失败。
+      console.warn(`[dsh-plugin-tool-management] state 隔离标记写入失败：${deps.message(e)}`)
+    }
+  }
+
+  /** 隔离态的报错文案：必须带上留存路径，否则用户无从找回。 */
+  function quarantineError(q: StateQuarantine): string {
+    return `state.json 已被隔离，自动写入已停止，以免用空状态覆盖证据链与墓碑。`
+      + `原因：${q.reason || '未知'}。原文件留存在 ${q.keptFile} —— 处理完它并删除 ${STATE_QUARANTINE_FILE} 后重启即可恢复写入。`
+  }
+
   async function readFresh(): Promise<{ ok: true; state: EvolutionState } | { ok: false; error: string }> {
     await deps.ensurePaths()
+    // 隔离标记是**权威闸门**：它存在时连读都不必给成功结果，否则调用方会拿着空状态
+    // 去改、再走 write()，而 write() 的 fail-closed 只是最后一道。
+    const q = await readQuarantine()
+    if (q) return { ok: false, error: quarantineError(q) }
     const read = await deps.readJsonFileStrict(absState())
     if (read.status === 'missing') return { ok: true, state: emptyState() }
-    if (read.status === 'corrupt' || read.status === 'unreadable') {
+    if (read.status === 'unreadable') {
+      // **绝不隔离、绝不改名**：读失败可能是杀软 / 索引器瞬时占用，重试就能好。
+      // 把"重试即可恢复"升级成"数据被搬走"，正是这条链最早的错误。
       return {
         ok: false,
-        error: `state.json ${read.status === 'corrupt' ? '损坏' : '不可读'}：${read.error}。已停止自动写入以免覆盖证据与墓碑；请检查该文件或从备份恢复。`,
+        error: `state.json 暂时读不出来：${read.error}。已停止自动写入；稍后重试或检查文件权限。`,
       }
     }
+    if (read.status === 'corrupt') {
+      const kept = await keepCorruptCopy(read.error)
+      return { ok: false, error: kept }
+    }
     const normalized = normalizeState(read.value)
-    if (!normalized.ok) return { ok: false, error: `state.json 结构不认识：${normalized.error}。已停止自动写入。` }
+    if (!normalized.ok) {
+      const kept = await keepCorruptCopy(normalized.error)
+      return { ok: false, error: kept }
+    }
     return normalized
+  }
+
+  /**
+   * 解析失败：**复制**一份留存（原文件留在原位），写下隔离标记，返回给用户看的文案。
+   *
+   * 用复制而不是改名：改名之后"原文件在哪"取决于备份是否成功，而复制失败时原文件仍在，
+   * 用户至少还能自己看到它。两种情况下正文文件一个都不动。
+   */
+  async function keepCorruptCopy(reason: string): Promise<string> {
+    const dest = corruptBackupPath()
+    // 留存副本的**绝对路径**。`corruptBackupPath()` 给的是 hub 相对路径（它同时被界面当
+    // 相对标识用），这里必须换成绝对的再记进隔离记录 —— `keptFile` 唯一的用途是写进
+    // 给用户看的那句话（「原文件留存在 …」），存相对路径等于让人拿到一个没法直接用的路径。
+    const destAbs = hubPath(dest)
+    let keptFile = absState()
+    try {
+      await copyFile(absState(), destAbs)
+      keptFile = destAbs
+    } catch {
+      // 复制不了就指着原文件：绝不 rm，那是用户唯一的证据链。
+    }
+    const info: StateQuarantine = { at: Date.now(), keptFile, reason }
+    await writeQuarantine(info)
+    return quarantineError(info)
   }
 
   async function read(): Promise<{ ok: true; state: EvolutionState } | { ok: false; error: string }> {
@@ -436,21 +661,14 @@ export function createEvolutionState(deps: EvolutionStateDeps): EvolutionStateSt
     return emptyState()
   }
 
-  /** 坏文件先备份：备份失败也要继续（用户至少还能看到原文件）。 */
-  async function backupCorrupt(): Promise<void> {
-    const dest = corruptBackupPath()
-    try {
-      await rename(absState(), hubPath(dest))
-    } catch {
-      // 备份不了就原地留着：绝不 rm，那是用户唯一的证据链。
-    }
-  }
-
   function corruptBackupPath(): string {
     return `evolution/state.json.corrupt-${Date.now()}`
   }
 
   async function write(state: EvolutionState): Promise<{ ok: true } | { ok: false; error: string }> {
+    // 最后一道闸：即便调用方绕过 readFresh 拿到了一份空状态，隔离期间也不许落盘。
+    const q = await readQuarantine()
+    if (q) return { ok: false, error: quarantineError(q) }
     try {
       await deps.ensurePaths()
       await mkdir(hubPath('evolution'), { recursive: true })
@@ -465,18 +683,28 @@ export function createEvolutionState(deps: EvolutionStateDeps): EvolutionStateSt
 
   async function update<T>(fn: (state: EvolutionState) => T | Promise<T>): Promise<{ ok: true; result: T } | { ok: false; error: string }> {
     const r = await readFresh()
-    if (!r.ok) {
-      // 读坏时先备份，让下一次写入有机会从空状态重建（正文文件都还在，会按 candidate 补回）。
-      await backupCorrupt()
-      return r
-    }
+    if (!r.ok) return r
     const result = await fn(r.state)
     const written = await write(r.state)
     if (!written.ok) return written
     return { ok: true, result }
   }
 
-  return { read, cachedSync, update, write, corruptBackupPath, invalidateCache: () => { cache = null } }
+  return {
+    read,
+    readFresh,
+    cachedSync,
+    update,
+    write,
+    corruptBackupPath,
+    quarantined: async () => await readQuarantine(),
+    clearQuarantine: async () => {
+      quarantined = null
+      quarantineChecked = true
+      await rm(quarantinePath(), { force: true }).catch(() => undefined)
+    },
+    invalidateCache: () => { cache = null },
+  }
 }
 
 /** 给条目追加一次迁移记录（保留最近 50 条）。 */
@@ -486,41 +714,3 @@ export function pushTransition(entry: EntryState, from: string, to: string, acto
   if (entry.transitions.length > 50) entry.transitions.splice(0, entry.transitions.length - 50)
 }
 
-/** 清掉磁盘上已不存在的条目的状态（保留墓碑）。返回清掉的 id。 */
-export function pruneOrphanEntries(state: EvolutionState, existingIds: Set<string>): string[] {
-  const removed: string[] = []
-  for (const id of Object.keys(state.entries)) {
-    if (existingIds.has(id)) continue
-    delete state.entries[id]
-    removed.push(id)
-  }
-  return removed
-}
-
-/** 给自动段的候选条目算分（`04-governance §4`）：置信度、新鲜度、有用度、钉住。 */
-export function scoreOf(
-  entry: { confidence: number; pinned: boolean; updatedAt?: string },
-  counters: EntryCounters,
-  maxHelpful: number,
-  now = Date.now(),
-): number {
-  const updatedAt = entry.updatedAt ? Date.parse(entry.updatedAt) : Number.NaN
-  const ageDays = Number.isFinite(updatedAt) ? Math.max(0, (now - updatedAt) / 86400_000) : 0
-  const fresh = 0.25 * Math.exp(-ageDays / 60)
-  // log(1+helpful)/log(1+maxHelpful)：第一条 helpful 最值钱，第十条几乎不加分。
-  const helpRatio = maxHelpful > 0 ? Math.log(1 + counters.helpful) / Math.log(1 + maxHelpful) : 0
-  return 0.45 * entry.confidence + fresh + 0.2 * Math.min(1, helpRatio) + (entry.pinned ? 0.1 : 0)
-}
-
-/** 清理临时文件残留（原子写的 `.tmp` 后缀）—— 启动时跑一次即可。 */
-export async function sweepTempFiles(dir: string): Promise<void> {
-  const { readdir } = await import('node:fs/promises')
-  try {
-    for (const name of await readdir(dir)) {
-      if (!name.startsWith('.') || !name.includes('.dsh-rules-') || !name.endsWith('.tmp')) continue
-      await rm(join(dir, name), { force: true }).catch(() => {})
-    }
-  } catch {
-    // 目录还不存在：没有残留可清。
-  }
-}

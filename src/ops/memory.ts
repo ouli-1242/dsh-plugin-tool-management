@@ -10,7 +10,7 @@ import { lstat, mkdir, readFile, rename, rm } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { parseSkillDoc, unquote } from '../skills/core.js'
 import { expandUploads, planMemoryImport } from '../imports/upload.js'
-import { MAX_RULE_WIDTH, MAX_MEMORY_NAME_WIDTH, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, GLOBAL_SCENE_LABEL, SHARED_GROUP, MAX_ATTACH_ENTRY_BYTES, MAX_ATTACH_TOTAL_BYTES, MAX_ATTACH_ENTRIES, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, isValidGroupSegment, isValidGroupPath, message, fail } from '../memories/constants.js'
+import { MAX_RULE_WIDTH, MAX_MEMORY_NAME_WIDTH, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, GLOBAL_SCENE_LABEL, SHARED_GROUP, MAX_ATTACH_ENTRY_BYTES, MAX_ATTACH_TOTAL_BYTES, MAX_ATTACH_ENTRIES, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, isValidGroupSegment, isValidGroupPath, isReservedGroup, message, fail } from '../memories/constants.js'
 import { excerptOf, textWidthOf } from '../text-width.js'
 import { normalizeActive, enabledSceneOf, sceneOf, sceneLabel, attachmentSummarySync } from '../memories/projection.js'
 import { writeFileAtomically, writeFileAtomicBinary, readIndex, writeIndex, pathExists } from '../memories/index-io.js'
@@ -37,8 +37,8 @@ function compareCreatedAt(a: string | undefined, b: string | undefined): number 
  * 正文按显示宽度校验（不是字节）：同一条规则写中文比写英文密一倍，按字节卡会让中文记忆
  * 只有英文的一半内容。超限返回拒绝回执，没超返回 null。
  *
- * 盘上已有的超长文件不受影响 —— 这条闸只在**写入**时生效，读与注入照旧（`DEFAULT_MAX_BYTES`
- * 才是注入侧那道闸）。
+ * 盘上已有的超长文件不受影响 —— 这条闸只在**写入**时生效，读与注入照旧（`memories/constants.ts`
+ * 的 `DEFAULT_MAX_BYTES` 才是注入侧那道闸）。
  */
 function bodyWidthError(body: string): { ok: false; error: string; code: string } | null {
   const width = textWidthOf(body)
@@ -153,6 +153,13 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {  const { buildProjected, co
         enabled: effectiveRules.filter((r) => r.enabled).length,
         scenes: scenes.filter((s) => s.active).length,
       },
+      // 工作区清单（只给界面用）：`_ws/<hash16>` 那几节要显示项目名，而不是 hash 前 8 位。
+      //
+      // 每条带 `missing`：目录已经不在了的那些不进「新建记忆」的落点，但**已有条目照常列出**
+      // —— 条目还在盘上，凭空消失比多一行更糟。恢复目录后 `missing` 自然变回 false。
+      //
+      // 读不到就整个字段不给（界面退回 hash 短码）：报空数组会被当成「一个工作区都没有」。
+      ...(rc.workspacesOf === undefined ? {} : { workspaces: await rc.workspacesOf().catch(() => null) ?? undefined }),
       ...(snap.warnings.length ? { warnings: snap.warnings } : {}),
     }
   }
@@ -289,11 +296,15 @@ export function buildMemoryOps(rc: MemoriesOpsCtx) {  const { buildProjected, co
     if (group !== '' && !isValidGroupPath(group)) return fail('error.rules.invalidGroup', `场景名非法：${group}（${SEGMENT_RULE_HINT}）`)
     const targetGroup = group === '' ? GLOBAL_SCENE : group
     const indexForScene = await readIndex(stateDir)
-    // 保留组 `global` / `_shared` 恒存在（不用先建场景记录）；其余场景必须已存在。
-    // `_shared` 与 `global` 一样是恒常注入的保留组：`memory_remember` 已把它列为可用目标，
-    // 这里再按"场景必须已存在"拒掉，两条路径就会互相矛盾。
-    if (targetGroup !== GLOBAL_SCENE && targetGroup !== SHARED_GROUP && !indexForScene.scenes?.[targetGroup] && !(await pathExists(join(memoriesRoot, targetGroup)))) {
+    // 工作区记忆：`_ws/<hash16>` 是**用户手写**的工作区记忆（与自主笔记的 `_ws` 分属两棵树，
+    // 靠 origin 区分）。它不进场景列表 —— 工作区不是场景，进了就会以 `## Scene Memories: _ws/3f2a`
+    // 出现，也会被当成可选场景。这里放行它，其余保留组仍然拒绝。
+    const isWorkspaceGroup = /^_ws\/[0-9a-f]{16}$/.test(targetGroup)
+    if (targetGroup !== GLOBAL_SCENE && targetGroup !== SHARED_GROUP && !isWorkspaceGroup && !indexForScene.scenes?.[targetGroup] && !(await pathExists(join(memoriesRoot, targetGroup)))) {
       return fail('error.rules.sceneNotFound', `场景不存在：${targetGroup}（请先在「场景」页创建该场景）`, { group: targetGroup })
+    }
+    if (isReservedGroup(targetGroup) && !isWorkspaceGroup && targetGroup !== SHARED_GROUP && targetGroup !== GLOBAL_SCENE) {
+      return fail('error.rules.invalidGroup', `保留组不能作为记忆目标：${targetGroup}`, { group: targetGroup })
     }
     if (!isValidGroupSegment(name)) return fail('error.rules.invalidName', `记忆名非法：${name}（${SEGMENT_RULE_HINT}）`)
     const nameTooWide = nameWidthError(name)

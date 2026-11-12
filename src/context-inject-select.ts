@@ -47,10 +47,14 @@ export function normalizeInjectSettings(raw: unknown): InjectSettings {
     }
     // 合并前的三个键迁移到两个新块：`memory` 的用户选择优先，其次沿用旧的自动层开关。
     // 旧自动层的真正门禁在 `evolution/settings.json`，这里只搬"用户有没有关过这一块"。
+    //
+    // `memory` 要**同时**喂给两个新块。早先只喂 `memoryGlobal`：旧配置 `{memory:false}`
+    // 迁出来是 global=false / workspace=默认(true) —— 升级后工作区那块**静默从关变成开**，
+    // 而用户从没点过它。同一个旧开关拆成两块时，两块的初值都该来自它。
     const legacy = key === 'memoryGlobal'
       ? ['memory', 'autoGlobal']
       : key === 'memoryWorkspace'
-        ? ['autoWorkspace']
+        ? ['memory', 'autoWorkspace']
         : []
     const inherited = legacy.find((name) => typeof domainsRaw[name] === 'boolean')
     domains[key] = inherited === undefined
