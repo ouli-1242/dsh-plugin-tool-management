@@ -297,6 +297,13 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-kind-tag{flex:none;display:inline-flex;align-items:center;padding:0 6px;height:18px;border-radius:4px;border:1px solid var(--dsw-alias-line-tertiary,rgba(255,255,255,.16));color:var(--dsw-alias-label-tertiary,rgba(255,255,255,.55));font-size:11px;line-height:1;white-space:nowrap}
 .dsm-target-pick{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .dsm-target-pick>*{flex:1 1 120px;min-width:0}
+/* 「新建记忆」的层级 + 二级下拉：左边那格只装短标签（全局 / 工作区 / 场景），宽度减半 ——
+   腾出来的横向空间全给右边那格，因为它装的是工作区名 / 场景名，那串名字常比一整行还长，
+   挤在半宽里就被省略号截掉，看不出是哪一档。
+   只有层级一格时（选「全局」）它独占整行 —— 空着一大半不自然。 */
+.dsm-target-pick>.dsm-target-level{flex:0 0 120px}
+.dsm-target-pick>.dsm-target-name{flex:1 1 auto;min-width:0}
+.dsm-target-pick>.dsm-target-level:only-child{flex:1 1 auto}
 /* 后台复习与其它段同版式：标题在框外，列表与失败项在框里。 */
 .dsm-evo-review{display:flex;flex-direction:column;gap:6px}
 .dsm-evo-review-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}

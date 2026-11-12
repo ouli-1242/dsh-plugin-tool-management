@@ -2740,7 +2740,11 @@
                    */
                   editor.mode === 'create'
                     ? React.createElement('div', { className: 'dsm-target-pick' },
+                      // 层级下拉只装短标签（全局 / 工作区 / 场景），给它固定窄宽；
+                      // 腾出来的横向空间全给右边那个 —— 它装的是工作区名 / 场景名，
+                      // 那串名字常比容器还长，收窄了就被截成看不出是哪一档。
                       React.createElement(SourceSelect, {
+                        className: 'dsm-target-level',
                         options: createTargets.levels,
                         value: createKind,
                         ariaLabel: t('memory.field.level'),
@@ -2748,6 +2752,7 @@
                         onChange: function (v) { onPickCreateLevel(v) },
                       }),
                       createKind === 'global' ? null : React.createElement(SourceSelect, {
+                        className: 'dsm-target-name',
                         options: createKind === 'workspace' ? createTargets.workspace : createTargets.scene,
                         value: editor.group || '',
                         ariaLabel: createKind === 'workspace' ? t('memory.level.workspace') : t('memory.level.scene'),
