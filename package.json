@@ -39,7 +39,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/sync-client.mjs && node scripts/sync-profile.mjs",
-    "prepublishOnly": "npm run build && npm run lint && npm run check:css && npm run typecheck:client && node --test test/client-exports.test.mjs",
+    "prepublishOnly": "npm run build && npm run lint && npm run check:i18n && npm run check:css && npm run typecheck:client && node --test test/client-exports.test.mjs",
     "lint": "node --check lib/client.js && node --check lib/index.js",
     "typecheck:client": "node scripts/sync-client.mjs && tsc -p tsconfig.client.json",
     "check:css": "node scripts/check-css-chain.mjs",
