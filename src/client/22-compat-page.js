@@ -712,7 +712,13 @@
         const next = Object.assign({}, inject, patch)
         setInject(next)
         setSaveError(null)
-        apiCall('inject-settings', Object.assign({ set: true }, next))
+        // **只发这次改的那几个字段**，不发整份快照。
+        //
+        // 服务端是按字段合并的（`settings-sidecars.ts` 的 injectSettingsOp），所以发整份
+        // 快照等于用"我这个窗口上一次读到的值"覆盖别的窗口在这期间的改动 —— 典型症状是
+        // 两个设置页开着，A 改了域开关，B 随后改目录上限，A 的改动被静默回退。
+        // 本地已经乐观更新过整份 next，所以回包只用来纠正"服务端实际存了什么"。
+        apiCall('inject-settings', Object.assign({ set: true }, patch))
           .then(function (r) {
             if (r && r.ok === false) {
               setSaveError(r.error || t('compat.save.failed'))

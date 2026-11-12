@@ -846,13 +846,13 @@
                   React.createElement('input', { className: 'dsm-control', value: modal.form.description || '', maxLength: CATALOG_DESC_MAX, placeholder: t('subagents.field.description.placeholder'), onChange: function (e) { setForm({ description: e.target.value }) } })),
                 React.createElement('label', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('subagents.field.body')),
-                  React.createElement('textarea', { className: 'dsm-control dsm-textarea-md', value: modal.form.body || '', placeholder: t('subagents.field.body.placeholder'), onChange: function (e) { setForm({ body: e.target.value }) } })),
+                  React.createElement('textarea', { className: 'dsm-control dsm-textarea-md dsm-subagent-body', value: modal.form.body || '', placeholder: t('subagents.field.body.placeholder'), onChange: function (e) { setForm({ body: e.target.value }) } })),
                 // 输出要求（frontmatter `output:`，一条一行）：单独成节写进子代理的系统提示词。
                 // 与正文分开是有意的 —— 正文是"这个角色是什么"（散文），这里放"产出必须长什么样"
                 // （可检验的硬要求）。混在一起时散文会把硬要求稀释成风格提示（用户实测）。
                 React.createElement('label', { className: 'dsm-field' },
                   React.createElement('span', { className: 'dsm-label' }, t('subagents.field.output')),
-                  React.createElement('textarea', { className: 'dsm-control dsm-textarea-md', value: modal.form.output || '', placeholder: t('subagents.field.output.placeholder'), onChange: function (e) { setForm({ output: e.target.value }) } }),
+                  React.createElement('textarea', { className: 'dsm-control dsm-textarea-md dsm-subagent-output', value: modal.form.output || '', placeholder: t('subagents.field.output.placeholder'), onChange: function (e) { setForm({ output: e.target.value }) } }),
                   React.createElement('p', { className: 'dsm-help' }, t('subagents.field.output.hint'))),
                 // ── 高级选项（默认收起）──
                 // 模型 / 工具限制是「少数人才改」的字段，但一旦改错代价高（跨来源模型、工具名打错

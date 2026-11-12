@@ -20,10 +20,15 @@
       '.dsm-modal textarea.dsm-control.dsm-textarea-sm{min-height:88px}' +
       '.dsm-modal textarea.dsm-control.dsm-textarea-md{min-height:200px}' +
       '.dsm-modal textarea.dsm-control.dsm-textarea-lg{min-height:300px}' +
-      /* 新建/编辑人设弹窗（dsm-modal-compact，2026-10-10）：两块 textarea-md 的 200px 下限把
-         「保存」挤出 760 顶格的一屏（内容约 810px）。压到 150 —— 下限只决定初始高度，框照常
-         能拖高；权重 4 类 + 1 元素，压过上面那条 200px，不靠 !important。 */
-      '.dsm-modal.dsm-modal-compact textarea.dsm-control.dsm-textarea-md{min-height:150px}' +
+      /* 紧凑弹窗（dsm-modal-compact）的正文框：下限只决定初始高度，框照常能拖高。
+         权重 4 类 + 1 元素，压过上面那条 200px，不靠 !important。 */
+      '.dsm-modal.dsm-modal-compact textarea.dsm-control.dsm-textarea-md{min-height:300px}' +
+      /* 子智能体编辑器：正文 + 输出要求两块都要给下面的高级选项与保存键留位置。
+         默认 300px 两块就是 600px，加上其它字段必然溢出，用户得先滚过两大片空白才看得到保存。
+         取 180 / 150：够写四五行的角色描述与三四条硬要求，同时仍留出一屏能看到高级选项与保存。
+         框本身照常可拖高，长内容拖一下即可。 */
+      '.dsm-modal.dsm-modal-compact textarea.dsm-control.dsm-subagent-body{min-height:180px}' +
+      '.dsm-modal.dsm-modal-compact textarea.dsm-control.dsm-subagent-output{min-height:150px}' +
       '.dsm-detail-title-row{display:flex;align-items:center;justify-content:space-between;gap:8px}' +
       /* 标题行右侧的动作组：两个及以上按钮必须包一层 —— space-between 直接摊三个子元素时，
          中间那个会被顶到整行正中（用户 2026-10-15：「重启怎么在中间」）。标题在左、动作组
@@ -171,10 +176,39 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-evo-head-on.dsm-evo-head-pending{border-color:var(--dsm-warn)}
 .dsm-evo-head-pending{border-color:var(--dsm-warn)}
 .dsm-modal-evo{width:min(720px,100%)!important}
+/* 待确认弹窗：宽度定、**高度跟内容走**。
+   定高会让短内容下方空出一大片（这版截图就是这个毛病）。高度自适应后，一条两行正文
+   的记忆就是一张小卡，长记忆涨到上限为止，再长由内容区自己滚。
+   宽 800：比主弹窗（720）宽一截，整段正文不用挤成窄条；卡片里左侧是标签列、
+   右侧是值，正文再被挤窄就只剩两三个字一行。 */
+.dsm-modal-evo.dsm-modal-evo-review{width:min(800px,100%)!important;height:auto!important;max-height:min(640px,calc(100vh - 48px))!important;overflow:hidden}
+/* 弹窗根节点直接挂着三个孩子：head-wrap / nav / actions（Modal 不额外包一层 body）。
+   高度自适应时三者都不该主动伸展，超出 max-height 时由 nav 里的内容区收缩并滚动。
+   nav 保持 align-items:stretch：给 center 会把正文列也居中，上下各留一片空白。 */
+.dsm-modal-evo.dsm-modal-evo-review>.dsm-modal-head-wrap{flex:none}
+.dsm-modal-evo.dsm-modal-evo-review>.dsm-evo-review-nav{flex:0 1 auto;min-height:0;align-items:stretch}
+.dsm-modal-evo.dsm-modal-evo-review>.dsm-modal-actions{flex:none}
+/* 正文列：横向必须撑满（grow:1），否则左右两颗箭头不对称 —— 基础规则是 flex:1，
+   写成 flex:0 1 auto 会把 grow 一并归零，剩下的空间全堆到右箭头右边。
+   纵向不用管：nav 是 row 容器，高度由 align-items:stretch 决定，与 grow 无关。 */
+.dsm-modal-evo.dsm-modal-evo-review .dsm-evo-review-page{flex:1 1 auto;min-height:0}
+.dsm-modal-evo.dsm-modal-evo-review .dsm-evo-review-head{flex:none}
+/* 页码：与标题同排、灰一档。写成「3 / 12」，用户一眼知道进度。 */
+.dsm-evo-review-count{flex:none;margin-left:auto;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:17px;font-variant-numeric:tabular-nums}
+/* 内容区：默认按内容高度（短记忆不留白），超过弹窗上限才收缩并滚动。 */
+.dsm-modal-evo.dsm-modal-evo-review .dsm-evo-review-content{flex:0 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--dsw-alias-border-l2) transparent}
+.dsm-modal-evo.dsm-modal-evo-review .dsm-evo-review-content::-webkit-scrollbar{display:block;width:9px}
+.dsm-modal-evo.dsm-modal-evo-review .dsm-evo-review-content::-webkit-scrollbar-track{background:transparent}
+.dsm-modal-evo.dsm-modal-evo-review .dsm-evo-review-content::-webkit-scrollbar-thumb{border-radius:99px;background:var(--dsw-alias-border-l2)}
+/* 正文自己的 40vh 上限在定高弹窗里是多余的：外层已经限住了，再限一层会让短正文也留白。 */
+.dsm-modal-evo.dsm-modal-evo-review .dsm-evo-review-text{max-height:none;overflow:visible}
 .dsm-evo-modal{display:flex;flex-direction:column;gap:16px;max-height:70vh;overflow:auto}
 /* 设置行统一两列：左标题，右控件固定列。开关不再跟着标签宽度跑。 */
 .dsm-evo-section{display:flex;flex-direction:column;gap:6px}
-.dsm-evo-section-title{color:var(--dsw-alias-label-tertiary);font-size:12px;font-weight:600;line-height:17px}
+/* 分节标题（学习范围 / 学习频率 / 复习成本 / 笔记风格 / 学习记录 / 后台复习）：
+   用主色而不是 tertiary —— 它是这一段的标题，要和框里的内容一样清楚，
+   淡成 tertiary 时读起来像禁用文字。 */
+.dsm-evo-section-title{color:var(--dsw-alias-label-primary);font-size:12px;font-weight:600;line-height:17px}
 /* 每段设置的内容框：学习范围的三颗开关、学习记录、后台复习共用同一档边框 / 底色 / 内边距
    （与「学习频率」的 .dsm-caps-row 同形）。标题一律在框外 —— 框里只装这一段的控件与列表，
    四段看起来才是并列的，而不是「一张卡套着另一张卡」。 */
@@ -217,11 +251,52 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-evo-draft-reason{flex:1 1 100%;min-width:0;overflow:hidden;color:var(--dsw-alias-label-secondary);text-overflow:ellipsis;white-space:nowrap}
 /* 待确认弹窗：左右箭头贴边、正文在中间。箭头是纯图标按钮（‹ ›），宽度固定 ——
    它只在「翻页」这一个维度上工作，和底部那对取消 / 确认不是同一层动作。 */
-.dsm-evo-review-nav{display:flex;align-items:center;gap:8px}
-.dsm-evo-review-arrow{flex:none;width:30px;min-width:30px;padding:0;font-size:18px;line-height:1;color:var(--dsw-alias-label-secondary)}
-.dsm-evo-review-page{display:flex;min-width:0;flex:1;flex-direction:column;gap:8px}
-.dsm-evo-review-content{display:flex;flex-direction:column;gap:6px}
+/* 箭头贴边、垂直居中、固定尺寸。
+   关键：居中只作用在**箭头自己**（align-self:center），nav 本身必须是 stretch ——
+   给 nav 写 align-items:center 会连正文列一起居中，上下各留一大片空白。 */
+.dsm-evo-review-nav{display:flex;gap:8px}
+.dsm-evo-review-arrow{flex:none;align-self:center;width:28px;min-width:28px;height:28px;padding:0;font-size:16px;line-height:1;color:var(--dsw-alias-label-secondary);border-radius:var(--dsm-radius-m)}
+.dsm-evo-review-arrow:hover:not(:disabled){color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1)}
+.dsm-evo-review-page{display:flex;min-width:0;flex:1;flex-direction:column;gap:10px}
+.dsm-evo-review-content{display:flex;flex-direction:column;gap:10px}
 .dsm-evo-review-text{margin:0;max-height:40vh;overflow:auto;color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px;white-space:pre-wrap;word-break:break-word}
+/* 记忆卡：名称 / 正文 / 注脚全部收在一个带边框的框里。
+   一个框表达「这一条记忆的全部字段」，比把它们平铺在弹窗上清楚得多。 */
+.dsm-evo-review-card{display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:10px;row-gap:10px;padding:14px 16px;border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-1)}
+/* 两列网格：左列是标签、右列是值，行由字段自己声明。
+   为什么用 grid + display:contents 而不是每行一个 flex：flex 行各自的标签宽度互相独立，
+   「判断依据」这种四字标签会把同行的值推得比别行更靠右，值不再从同一条竖线开始。
+   摊平到同一张网格里，左列宽度由最宽的那个标签决定（auto），所有值自动对齐。
+   display:contents 让字段行本身不生成盒子，它的标签与值直接成为网格项。 */
+.dsm-evo-review-field{display:contents}
+.dsm-evo-review-field-label{white-space:nowrap;padding-top:1px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:19px}
+/* 基础规则给标题定了 nowrap + 省略号（列表行用），在卡片里要整段显示，所以这里全部覆盖。 */
+.dsm-evo-review-field .dsm-evo-review-title{min-width:0;overflow:visible;white-space:normal;text-overflow:clip;word-break:break-word}
+.dsm-evo-review-field .dsm-evo-review-text{min-width:0;max-height:none;overflow:visible}
+/* 边界：属于正文本身（落盘时就拼在正文末尾），只是单独成行好读。
+   用与正文同档的字色、稍小一点的字号 —— 它是正文的补充说明，不是来由。 */
+.dsm-evo-review-boundary{min-width:0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:19px;white-space:pre-wrap;word-break:break-word}
+/* 分隔线：横跨两列的一条细线，上面是这条记忆本身（名称 / 正文 / 边界），
+   下面是它的来由（类型 / 判断依据 / 用户原话）。用独立元素而不是某一层的上边框 ——
+   字段行与注脚行都已 display:contents（为了共用卡片的两列网格），没有盒子可以画边框。 */
+.dsm-evo-review-sep{grid-column:1 / -1;height:0;margin:0;border-top:1px solid var(--dsw-alias-border-l1)}
+.dsm-evo-review-meta-row{display:contents}
+.dsm-evo-review-meta-label{white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+.dsm-evo-review-meta-value{min-width:0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;white-space:pre-wrap;word-break:break-word}
+/* 用户原话要能一眼认出来：它是这张卡里唯一的「外部证据」，与模型自己写的区分开。 */
+.dsm-evo-review-meta-quote{color:var(--dsw-alias-label-primary);font-style:italic}
+/* 证据链：比正文弱一档，但紧跟正文 —— 它是「凭什么记这条」的答案。 */
+.dsm-evo-review-evidence{margin:0;padding:6px 0 0;border-top:1px solid var(--dsw-alias-line-secondary)}
+.dsm-evo-review-evidence p{margin:0 0 4px}
+.dsm-evo-review-evidence p:last-child{margin-bottom:0}
+/* 「新建记忆」的层级 + 二级下拉：两个控件并排，中间留一点缝 —— 上下堆叠会让表单
+   多出一行高度，而这两项本来就是同一个字段的两半。窄屏时自动换行。 */
+/* 自主记忆的类型标签（偏好 / 事实 / 纠正 / 做法）：贴名称右侧、灰边框。
+   它解释这条为什么可能过期，属于「这条是什么」，不跟正文摘要抢行 2 的位置。
+   边框用 tertiary 描边 + 次级字色：在深色底上够清楚，又不至于像状态标签那样抢眼。 */
+.dsm-kind-tag{flex:none;display:inline-flex;align-items:center;padding:0 6px;height:18px;border-radius:4px;border:1px solid var(--dsw-alias-line-tertiary,rgba(255,255,255,.16));color:var(--dsw-alias-label-tertiary,rgba(255,255,255,.55));font-size:11px;line-height:1;white-space:nowrap}
+.dsm-target-pick{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.dsm-target-pick>*{flex:1 1 120px;min-width:0}
 /* 后台复习与其它段同版式：标题在框外，列表与失败项在框里。 */
 .dsm-evo-review{display:flex;flex-direction:column;gap:6px}
 .dsm-evo-review-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -231,6 +306,19 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-evo-review-toggle{display:inline-flex;align-items:center;gap:6px;padding:0;border:0;background:transparent;color:var(--dsw-alias-label-tertiary);font-size:12px;font-weight:600;line-height:17px;cursor:pointer}
 .dsm-evo-review-toggle:disabled{cursor:default}
 .dsm-evo-review-head .dsm-help{margin:0;margin-left:auto}
+/* 每会话复习上限：一句话里一个数字框，与「学习频率」那条同一版式。 */
+.dsm-evo-review-limit{display:flex;align-items:center;gap:6px;flex-wrap:wrap;color:var(--dsw-alias-label-primary);font-size:12px;line-height:17px}
+/* 框内其余文字也用主色：这些是设置项的当前值，用户要读清楚「现在设的是几」。 */
+.dsm-evo-box .dsm-evo-records-stat{color:var(--dsw-alias-label-primary)}
+.dsm-evo-box .dsm-help{color:var(--dsw-alias-label-secondary)}
+.dsm-evo-review-limit .dsm-cap-input{width:56px}
+/* 复习模型下拉框：模型名带 provider 前缀（deepseek/deepseek-v4.1-flash-max）动辄 30+ 字符，
+   原来这里只约束了文本框的 200px，下拉框本身没有宽度约束，选项文字被压成三行。
+   给这一行的下拉一个足够宽的盒子，并让它可伸缩（窄屏时收缩而不是溢出）。 */
+.dsm-evo-review-limit .dsm-evo-model-input{width:200px;min-width:0}
+/* SourceSelect 渲染的是 button.dsm-select-trigger（没有外层包装），而它带 width:100%，
+   在 flex 行里会塌成内容宽度 —— 选项文字于是被挤成多行。给这一行里的触发器一个基准宽度。 */
+.dsm-evo-review-limit .dsm-select-trigger{width:260px;min-width:0;flex:0 1 260px}
 .dsm-evo-review-list{display:flex;flex-direction:column}
 .dsm-evo-review-row{display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid var(--dsw-alias-border-l1)}
 .dsm-evo-review-row:last-child{border-bottom:0}
@@ -587,8 +675,10 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-cap-group{display:inline-flex;align-items:center;gap:8px}
 .dsm-cap-name{flex:none;min-width:72px;color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px;white-space:nowrap}
 .dsm-cap-field{display:inline-flex;align-items:center;gap:4px}
-.dsm-cap-label{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;white-space:nowrap}
-.dsm-cap-unit{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;white-space:nowrap}
+/* 一句话设置项里的固定文字（每 / 分钟最多产生 / 条记忆）：用主色。
+   原来用 tertiary，在深色底上几乎看不清，像是禁用态。 */
+.dsm-cap-label{color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px;white-space:nowrap}
+.dsm-cap-unit{color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px;white-space:nowrap}
 .dsm-cap-input{width:58px;height:24px;min-height:0;padding:0 4px;text-align:center;font-size:12px;appearance:textfield;-moz-appearance:textfield}
 .dsm-cap-input::-webkit-inner-spin-button,.dsm-cap-input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
 /* 模型工具表：与「注入」同屏的第二种开关。**一行一个工具、四列固定宽度**（勾选框 / 名字 /

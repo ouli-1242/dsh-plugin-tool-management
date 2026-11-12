@@ -384,16 +384,33 @@
             // 场景显示名（`global` → 「全局」）：分组标题用它，别让用户在 `/` 菜单里看到磁盘名。
             const labels = {}
             for (const s of res.scenes || []) if (s && s.name) labels[s.name] = s.label || s.name
+            // 工作区显示名：`rules-list` 的 `workspaces[]` 是权威（读登记表）。
+            // 缺了它，工作区记忆的分组标题会退成裸 `_ws` —— 那是内部目录名，
+            // 用户看不出这是「哪个项目」的记忆。与记忆页 `memoryView` 同一口径。
+            const wsLabels = {}
+            for (const w of res.workspaces || []) if (w && w.hash) wsLabels[String(w.hash)] = String(w.label || '')
+            // 当前对话所在的工作区（自主记忆那侧已经在用同一个来源）：`_ws/<hash16>` 里的 hash。
+            const curWsHash = String((evoStatus && evoStatus.workspace && evoStatus.workspace.hash) || '')
             const toRow = function (r) {
               // 记忆的场景 = group 的第一段（与服务端 `sceneOf` 同一口径，见 memories/projection.ts）。
               const scene = String(r.group || '').split('/')[0]
               // 会话层（0.21.2）：覆盖键 = 记忆 id（`<场景>/<名>`）。
               const mc = cell('memory', String(r.id), r.enabled !== false)
+              // 工作区记忆的 `scene` 是 `_ws`（组的第一段），真正的工作区在第二段
+              // （`_ws/<hash16>`）：用 hash 去 `wsLabels` 查项目名。
+              const isWs = scene === '_ws'
+              const wsHash = isWs ? String(r.group || '').split('/')[1] || '' : ''
+              const wsName = wsHash !== '' ? (wsLabels[wsHash] || '') : ''
               return {
                 id: r.id, key: r.id, label: r.name, on: mc.on, scoped: mc.scoped, note: r.description,
                 scene: scene,
+                group0: String(r.group || ''),
                 // 打了字会跨场景搜，那时按场景分组才看得清是哪里的记忆。
-                group: labels[scene] || scene || t('slash.group.noScene'),
+                // 工作区那组优先用项目名，查不到才退 hash 短码 —— 裸 `_ws` 是内部目录名，
+                // 用户看不出这是哪个项目的记忆。
+                group: isWs
+                  ? (wsName !== '' ? wsName : (wsHash !== '' ? wsHash.slice(0, 8) : t('slash.group.workspace')))
+                  : (labels[scene] || scene || t('slash.group.noScene')),
                 run: function (next) {
                   return runFlag('memory', String(r.id), next, function () {
                     return apiCall('rules-toggle', { id: r.id, enabled: next })
@@ -403,25 +420,47 @@
               }
             }
             const all = (res.rules || []).filter(function (r) { return r.shadowed !== true }).map(toRow)
-            // 「全局」这一组排最前面（用户 2026-09-30 裁定）：它恒常注入，是这一域里最常要动的那组，
-            // 不该沉在当前场景后面。sort 是稳定的，组内顺序不动。
-            const globalFirst = function (list) {
-              return list.slice().sort(function (a, b) {
-                return (a.scene === GLOBAL_SCENE ? 0 : 1) - (b.scene === GLOBAL_SCENE ? 0 : 1)
+
+            // 默认列**当前场景 + 「全局」+ 当前工作区**：记忆动辄上百条，全列进来等于把记忆页
+            // 搬进 `/` 菜单，而这里要改的几乎总是正在用的那几个。三者都**恒常在上下文里**：
+            // 全局那份对任何对话都成立；工作区那份对当前项目成立。
+            //
+            // 工作区那一组漏掉是错的：它和场景记忆一样在注入，用户进场景后想停掉某条工作区
+            // 记忆，菜单里却找不到 —— 只能退出场景才能改。而「场景记忆」与「工作区记忆」是
+            // 正交的两层，不是二选一。
+            const shown = active
+              ? all.filter(function (r) {
+                if (r.scene === GLOBAL_SCENE || r.scene === active) return true
+                // 用 `group` 而不是 `key` 判：`group` 是 `_ws/<hash16>`，`key` 是记忆 id，两者形状不同。
+                return r.scene === '_ws' && curWsHash !== '' && r.group0 === '_ws/' + curWsHash
               })
-            }
-            // 默认列**当前场景 + 「全局」**：记忆动辄上百条，全列进来等于把记忆页搬进 `/` 菜单，
-            // 而这里要改的几乎总是正在用的那个场景；全局那份虽然不是"当前场景的"，却对任何对话
-            // 都成立、恒常在上下文里，用户想停掉的往往正是它。（场景域不列 global 是另一回事：
-            // 它没有开关可给；这里的判断对象是记忆条目，不是场景。）打了字才跨场景搜。
-            const shown = active ? all.filter(function (r) { return r.scene === active || r.scene === GLOBAL_SCENE }) : all
+              : all
             // 自主记忆：与用户记忆同形，但开关写的是条目自己的 `enabled`（没有会话层覆盖）。
             // 只列会注入的 active / core / playbook —— 候选是还没被用户认可的，归档与已取代
             // 是明确不再用的，摆进"管理哪些记忆生效"的菜单只会让人以为它们还在生效。
             // 层开关关着的组整组不列：那和场景没开时不列该场景记忆是同一条口径。
             const noteRows = await slashAutoNoteRows(t, evoStatus)
-            const userItems = globalFirst(shown)
-            const userPool = globalFirst(all)
+            // 分组顺序由「首次出现的顺序」决定（见 `leafRows`）：宿主只在 section 变化时画
+            // 标题，同组被拆开就会冒出一串重复标题。所以这里直接把条目按目标顺序排好，
+            // 而不是「用户记忆全在前、自主记忆全在后」—— 那样全局自主会掉到工作区记忆后面。
+            //
+            // 目标顺序：全局 → 全局自主 → 工作区自主 → 工作区 → 场景。
+            // 前四者都恒常在上下文里（全局对所有对话成立、工作区对当前项目成立），场景
+            // 只在进入后成立，所以排最后。
+            const rankOf = function (item) {
+              if (item.kind === 'note') return item.noteLayer === 'global' ? 1 : 2
+              if (item.scene === GLOBAL_SCENE) return 0
+              if (item.scene === '_ws') return 3
+              return 4
+            }
+            const orderItems = function (list) {
+              return list.slice().sort(function (a, b) {
+                const ra = rankOf(a), rb = rankOf(b)
+                return ra !== rb ? ra - rb : 0
+              })
+            }
+            const userItems = orderItems(shown.concat(noteRows))
+            const userPool = orderItems(all.concat(noteRows))
             return {
               summaryOf: function (items) {
                 const users = items.filter(function (x) { return x.kind !== 'note' }).length
@@ -431,8 +470,9 @@
                   : t('slash.sum.count', { n: users })
                 return notes > 0 ? base + ' · ' + t('slash.sum.notes', { n: notes }) : base
               },
-              items: userItems.concat(noteRows),
-              searchPool: active || noteRows.length ? userPool.concat(noteRows) : null,
+              // `noteRows` 已在 `orderItems` 里合并且排好序，这里不能再拼一次（会重复出现）。
+              items: userItems,
+              searchPool: active || noteRows.length ? userPool : null,
             }
           },
         },
@@ -533,6 +573,9 @@
           id: 'note:' + e.id, key: 'note:' + e.id, label: name, note: e.oneLine,
           on: e.enabled !== false,
           kind: 'note',
+          // 层用**字段**带出去，不要靠 `group` 的文案反推：文案是展示用的，改一次措辞
+          // 就会让排序悄悄失效（而排序错位的症状是分组标题重复出现，很难联想到文案）。
+          noteLayer: e.layer === 'global' ? 'global' : 'workspace',
           // 用户记忆那行「全局：所有对话生效」的尾巴对笔记是错的：笔记的开关按层生效。
           noScopeTail: true,
           group: t(e.layer === 'global' ? 'slash.memory.auto.global' : 'slash.memory.auto.workspace'),
@@ -1306,6 +1349,9 @@
             // 记忆描述）：启用状态图标位那枚勾已经说了，不必再占一格。没有备注的才退回状态词，
             // 免得那一格空着像坏了。
             const note = clipText(item.note, LEAF_NOTE_MAX)
+            // 不再在行首加 `[归属]` 前缀：分组标题（`section`）已经写明了这一组属于哪个
+            // 场景 / 工作区，而宿主只在 `section` 变化时画标题，搜索跨组时标题照样在。
+            // 前缀与标题重复，还把记忆名挤到后面。
             return {
               name: domain.token + '/' + item.id, label: item.label,
               // 会话作用域：覆盖行右侧追加「· 本会话」/「· 本工作区」（0.21.2 跟着隔离粒度）。
