@@ -1192,9 +1192,9 @@
           }
 
           /**
-           * 否决当前这条 → 归档（不再注入、收进列表底部的「已归档」、随时可恢复），然后进入下一条。
+           * 否决当前这条 → 正文移进统一回收站，然后进入下一条。
            *
-           * 不用 `evolution-forget`：那条会删文件并写墓碑，30 天内同义内容学不回来 ——
+           * 不用 `evolution-forget`：那条会写墓碑，30 天内同义内容学不回来 ——
            * 「这条我不要」和「这个说法以后都别记」是两件事，否决只该表达前一件。
            */
           function rejectEvolutionInReview() {
@@ -1202,7 +1202,7 @@
             if (!cur || cur.busy || cur.loading) return
             var id = cur.id
             setEvoReview(Object.assign({}, cur, { busy: true, error: null }))
-            apiCall('evolution-set-status', { id: id, status: 'archived' }).then(function (res) {
+            apiCall('evolution-discard', { id: id }).then(function (res) {
               if (!res || res.ok === false) {
                 setEvoReview(function (c) {
                   return c && c.id === id ? Object.assign({}, c, { busy: false, error: translateError(t, res) }) : c
@@ -1311,23 +1311,6 @@
             }).catch(function (e) { setEvoBusy(false); setResult({ ok: false, text: errMsg(e) }) })
           }
 
-          /**
-           * 已归档 → 生效。
-           *
-           * 归档只是"不再注入"，文件与正文都还在；恢复就是把状态拨回 `active`。
-           * 不走回收站：回收站管的是删除，已归档的条目从没进过那里。
-           */
-          function restoreEvolution(id) {
-            setEvoBusy(true)
-            apiCall('evolution-set-status', { id: id, status: 'active' }).then(function (res) {
-              setEvoBusy(false)
-              if (res && res.ok !== false) {
-                setResult({ ok: true, text: t('evo.restored') })
-                refreshEvolution()
-              } else setResult({ ok: false, text: translateError(t, res) })
-            }).catch(function (e) { setEvoBusy(false); setResult({ ok: false, text: errMsg(e) }) })
-          }
-
           /** 算整理草案（只读）。结果留在卡片里，用户逐条「应用」。 */
           function runOrganize() {
             setEvoOrg({ busy: true, drafts: null, scanned: 0, error: null })
@@ -1404,9 +1387,7 @@
             // core / playbook 是旧数据里仍可注入的两档，按「生效」显示，不标成待确认。
             var statusKey = e.status === 'core' ? 'evo.tag.core'
               : e.status === 'active' || e.status === 'playbook' ? 'evo.tag.active'
-                : e.status === 'superseded' ? 'evo.tag.superseded'
-                  : e.status === 'archived' ? 'evo.tag.archived'
-                    : 'evo.tag.candidate'
+                : 'evo.tag.candidate'
             var enabled = e.enabled !== false
             var tone = !enabled ? 'idle' : e.status === 'core' || e.status === 'active' || e.status === 'playbook' ? 'ok' : e.status === 'candidate' ? 'warn' : 'idle'
             var pending = e.status === 'candidate'
@@ -1651,9 +1632,10 @@
           }
 
           /**
-           * 过滤一组自主记忆：搜索命中 + 拆出已归档 / 已取代，并算出生效数。
-           * 已归档单独回传（卡片底部那行「已归档」用它渲染恢复入口）；已取代是历史，
-           * 没有恢复语义，直接丢。
+           * 过滤一组自主记忆：搜索命中 + 丢掉已归档 / 已取代，并算出生效数。
+           *
+           * 已归档不再出现在自主记忆目录里：否决与删除都把正文移进了统一回收站，
+           * 恢复入口只有回收站一个，这里不需要第二套。
            */
           function evolutionGroupView(groups) {
             return (groups || []).map(function (g) {
@@ -1665,10 +1647,8 @@
                   return hay.toLowerCase().indexOf(q) >= 0
                 })
               }
-              // 已归档不进生效列表，但也不是垃圾：放在底部折叠区里，能一键恢复。
               var live = rows.filter(function (e) { return e.status !== 'archived' && e.status !== 'superseded' })
-              var archived = rows.filter(function (e) { return e.status === 'archived' })
-              return { key: g.key, label: g.label, live: live, on: evolutionOnCount(live), archived: archived }
+              return { key: g.key, label: g.label, live: live, on: evolutionOnCount(live) }
             })
           }
 
@@ -1683,54 +1663,26 @@
           }
 
           /**
-           * 已归档行：只留名称、正文摘要与「恢复」。
-           *
-           * 归档的条目不再注入，行内开关没有意义；要删就直接从列表里恢复后删，
-           * 或去回收站 —— 这里只给一条最常用的出路。
-           */
-          function renderArchivedRow(e) {
-            var title = evolutionNameOf(e)
-            var body = String(e.oneLine || '').trim()
-            return React.createElement(ListRow, {
-              key: 'arch:' + e.id,
-              dots: [React.createElement(StatusDot, { key: 'd', tone: 'idle', title: t('evo.tag.archived') })],
-              name: title,
-              meta: body !== '' && body !== title
-                ? [React.createElement('span', { key: 'body', className: 'dsm-listrow-meta-desc', title: body }, body)]
-                : undefined,
-              side: React.createElement('button', {
-                type: 'button', className: 'dsm-btn dsm-btn-quiet', disabled: evoBusy,
-                title: t('evo.archived.restoreTip'),
-                onClick: function () { restoreEvolution(e.id) },
-              }, t('evo.archived.restore')),
-            })
-          }
-
-          /**
            * 工作区自主记忆卡。`groups` 是这张卡要展示的工作区分组，组间画分节线。
            * `cardKey` 同时是折叠状态的键。
            *
            * 复用场景卡的骨架（.dsm-source），行沿用 renderEvolutionRow（ListRow）：
-           * 名称 + 正文，候选行右侧有「确认」，生效行右侧是开关（关闭只停止注入，删除才进回收站）。
+           * 名称 + 正文，候选行右侧有「确认」，生效行右侧是开关（关闭只停止注入，否决与删除都进回收站）。
            * 卡头右侧的「设置」开设置弹窗（两层开关 / 风格 / 整理），卡片本身只管展示与逐条操作。
            *
-           * 已归档的条目收在卡片底部一行折叠里：它们不在生效清单里，但用户否决错了要能
-           * 就地找回 —— 回收站里没有它们（归档不删文件）。
+           * 已归档 / 已否决 / 已删除都不在这里：正文已经移进统一回收站，恢复入口只有回收站。
            */
           function renderEvolutionCard(opts) {
             var layerOn = opts.layerOn
             var groups = evolutionGroupView(opts.groups)
             var total = 0
             var onCount = 0
-            var archivedRows = []
             groups.forEach(function (g) {
               total += g.live.length
               onCount += g.on
-              archivedRows = archivedRows.concat(g.archived)
             })
-            // 生效的一条都没有、归档也没有 → 不渲染：空卡只占空间。
-            // 只有归档时必须画：否则刚否决最后一条，卡片连同恢复入口一起消失。
-            if (total === 0 && archivedRows.length === 0) return null
+            // 一条生效的都没有 → 不渲染：空卡只占空间。
+            if (total === 0) return null
             // 默认展开跟总开关走（开 = 这里就是它注入的清单，该一眼能看）；手动收起的以手动为准。
             var openFlag = collapsed[opts.cardKey]
             var baseOpen = openFlag === undefined ? layerOn : openFlag !== true
@@ -1741,18 +1693,6 @@
               body.push(renderEvolutionDivider('h:' + g.key, g.label, g.on, g.live.length))
               body = body.concat(g.live.map(function (e) { return renderEvolutionRow(e) }))
             })
-            if (archivedRows.length > 0) {
-              var archivedKey = opts.cardKey + ':archived'
-              var archivedOpen = collapsed[archivedKey] === true
-              body.push(React.createElement('div', { key: archivedKey, className: 'dsm-evo-archived' },
-                React.createElement('button', {
-                  type: 'button', className: 'dsm-evo-review-toggle', 'aria-expanded': archivedOpen,
-                  onClick: function () { toggleCollapse(archivedKey, !archivedOpen) },
-                }, t('evo.archived.toggle', { count: archivedRows.length })),
-                archivedOpen
-                  ? React.createElement('div', { className: 'dsm-evo-archived-list' }, archivedRows.map(renderArchivedRow))
-                  : null))
-            }
             // 总开关开 = 卡照常；关 = 整卡置灰（条目还在盘上，只是不再注入）。
             return React.createElement('div', { key: opts.cardKey, className: 'dsm-source' + (layerOn ? '' : ' dsm-rule-off') },
               React.createElement('div', { className: 'dsm-source-head' },
@@ -2366,12 +2306,9 @@
               active: auto.active || 0,
               pending: auto.pending || 0,
             })
-            // 待复核与已归档只在非零时追加：它们是"需要你做什么"与"你已经收起了什么"，
-            // 恒显示一个 0 只会让这行变长。这两个数服务端一直在给，界面此前从没读过。
+            // 待复核只在非零时追加：它表示"需要你做什么"，恒显示一个 0 只会让这行变长。
             var evoDue = Number(auto.reviewDue) || 0
             if (evoDue > 0) statText += t('evo.stat.reviewDue', { due: evoDue })
-            var evoArchived = Number(auto.archived) || 0
-            if (evoArchived > 0) statText += t('evo.stat.archived', { archived: evoArchived })
             // 索引读坏：条目可能整块为空，而用户看到的是"我明明学过几条"。这一句必须显式
             // 说清是读不到，不是没有 —— 否则他会以为自己的记忆丢了。
             if (auto.broken === true) statText += t('evo.stat.broken')
@@ -2679,12 +2616,12 @@
                   onClick: function () { stepEvolutionReview(1) },
                 }, '›')),
               // 左下否决 / 右下确认（用户 2026-11-11）。处理完自动进下一条，全部处理完自动关窗。
-              // 否决 = 归档（不注入、可恢复），不是删除 —— 删除会写墓碑，30 天内同义内容
+              // 否决 = 正文移进回收站，可恢复，但不写墓碑 —— 删除会写墓碑，30 天内同义内容
               // 都学不回来，那是另一件事。
               React.createElement('div', { className: 'dsm-modal-actions dsm-modal-actions-split' },
                 // 与「确认」同一档主按钮（用户 2026-11-11）：两个都是对这条记忆的处置，
-                // 没有主次，方向由文案与左右位置表达。**不用红色** —— 否决是归档（不注入、
-                // 可恢复），不是销毁；红色在这里会把「先不采用」说成「危险操作」。
+                // 没有主次，方向由文案与左右位置表达。**不用红色** —— 否决是把正文收进
+                // 回收站，可恢复，不是销毁；红色在这里会把「先不采用」说成「危险操作」。
                 React.createElement('button', { type: 'button', className: 'dsm-btn', disabled: evoReview.busy || evoReview.loading, onClick: rejectEvolutionInReview }, t('evo.review.reject')),
                 React.createElement('button', {
                   type: 'button', className: 'dsm-btn',

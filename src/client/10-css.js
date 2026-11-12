@@ -308,10 +308,6 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-evo-review-caret{width:12px;height:12px;flex:none;color:var(--dsw-alias-label-primary)}
 .dsm-evo-review-toggle:disabled{cursor:default}
 .dsm-evo-review-head .dsm-help{margin:0;margin-left:auto}
-/* 自主记忆卡底部的「已归档」折叠区：用一条细线与上面的生效行分开 ——
-   它们不再注入，混在同一张清单里读起来像还生效。 */
-.dsm-evo-archived{display:flex;flex-direction:column;gap:4px;margin-top:2px;padding-top:6px;border-top:1px solid var(--dsw-alias-line-secondary)}
-.dsm-evo-archived-list{display:flex;flex-direction:column}
 /* 每会话复习上限：一句话里一个数字框，与「学习频率」那条同一版式。 */
 .dsm-evo-review-limit{display:flex;align-items:center;gap:6px;flex-wrap:wrap;color:var(--dsw-alias-label-primary);font-size:12px;line-height:17px}
 /* 框内其余文字也用主色：这些是设置项的当前值，用户要读清楚「现在设的是几」。 */

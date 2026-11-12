@@ -708,11 +708,10 @@
       var deleted = m.deletedAt ? new Date(m.deletedAt).toLocaleString() : ''
       if (deleted) rows.push([t('trash.preview.field.deletedAt'), deleted])
       if (domain === 'memories') {
-        // 自动记忆的停用副本：没有场景、不是 bundle，多报一层与「已归档」状态。
+        // 自动记忆的副本：没有场景、不是 bundle，只多报一条属于自己的层。
         if (m.auto === true) {
           rows.push([t('trash.preview.field.auto'), t('trash.preview.yes')])
           rows.push([t('trash.preview.field.layer'), t('evo.layer.' + (m.autoLayer === 'global' ? 'global' : 'workspace'))])
-          rows.push([t('trash.preview.field.status'), t('evo.tag.archived')])
           return rows
         }
         if (m.group !== undefined) rows.push([t('trash.preview.field.scene'), sceneLabel([], String(m.group || ''))])
