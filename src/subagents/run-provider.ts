@@ -331,32 +331,34 @@ export function createRunProvider(deps: RunProviderDeps): Record<string, any> {
 
     const startSignal = signal ?? new AbortController().signal
     // 激活请求在两代宿主上是两种形状：一代把任务字段装在 `request` 里，一代把它们平铺在顶层。
-    // 两份一起发 —— 官方各自只读自己那份，另一份被忽略，所以同一份载荷在两代上都成立。
-    // 只发一种形状会在另一代上静默丢字段（`parent` / `prompt` 读不到 → 启动即失败）。
+    // 官方 `SubagentActivationSpec extends Omit<SubagentStartRequest, 'label' | 'signal'>`：
+    // 字段全在**最外层**（`cwd` / `prompt` / `parent` / `agentPreset` / `agentOptions` /
+    // `maxDepth`），没有嵌套的 `request`。所以这里拼成一份扁平载荷。
     const request = {
       parent: parentAgent,
       prompt: [{ type: 'text', text: kind === 'fork' ? renderPersonaPrompt(p) + '\n\n' + task : task }],
       ...(agentPreset === undefined ? {} : { agentPreset }),
       ...routeOptions,
     }
+    const base = {
+      provider: kind,
+      label: p.name,
+      ...(childId === undefined ? {} : { childId }),
+      signal: startSignal,
+      delivery: p.continuable === true ? 'parent' : 'caller',
+    }
     let activation: any
     try {
-      activation = await runtime.startActivation({
-        provider: kind,
-        label: p.name,
-        ...(childId === undefined ? {} : { childId }),
-        ...request,
-        request,
-        signal: startSignal,
-        delivery: p.continuable === true ? 'parent' : 'caller',
-      })
+      activation = await runtime.startActivation({ ...base, ...request })
     } catch (error) {
       try { stopWatching?.() } catch { /* ignore */ }
       await releasePreset?.().catch(() => undefined)
       // 失败可能就是我们自己的监听器抛的（fail-closed 那条）：那句话更接近根因，
       // 别让官方的通用报错把它盖掉。
-      if (restrictionFailure === undefined) throw error
-      throw new Error(`failed to apply the subagent tool restriction: ${restrictionFailure.message}`, { cause: error })
+      if (restrictionFailure !== undefined) {
+        throw new Error(`failed to apply the subagent tool restriction: ${restrictionFailure.message}`, { cause: error })
+      }
+      throw error
     }
 
     // 创建窗口结束，监听器摘掉（它只服务这一个 child id）。

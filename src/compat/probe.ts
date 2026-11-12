@@ -80,7 +80,7 @@ export {
 } from './host-roots.js'
 export type { OperationName, RouteDecision } from './host-roots.js'
 import { hostRootCandidates, hostVersionOf, IDENTITY_PACKAGES, looksLikeHostPackageDir, routeFor, VERIFIED_HOST_VERSION } from './host-roots.js'
-import { DEFAULT_PRESET_ID, presetCompositionWiresPresetSkills } from '../skills/official.js'
+import { DEFAULT_PRESET_ID, presetCompositionWiresPresetSkills, readHostPresetComposition } from '../skills/official.js'
 import { presetRosterOf } from './preset-reach.js'
 
 // 「宿主在哪」这份口径只有一份（host-roots.ts 的 hostRootCandidates）。静态能力表里有条目要
@@ -836,14 +836,15 @@ function inspectOfficialSkillAssets(
       } catch { names = [] }
       // 宿主把预设技能目录接进会话上下文与否，看默认预设的组合文件（官方部署的默认
       // 预设 id 是 standard）：接了才注入，没接的预设不注入 —— 这一行据此说人话。
-      let wired: boolean | null = null
-      try {
-        const composition = readFileSync(
-          join(hostRoot, 'dsh-web-app', 'presets', `${presetId}.patch.yml`),
-          'utf8',
-        )
-        wired = presetCompositionWiresPresetSkills(composition)
-      } catch { /* 读不到就按「接了」处理，与物化侧同一口径 */ }
+      // 读不到组合文件时 `wired` 保持 `null`，这一行按 `ok` 报（无法判定，不谎报缺陷）。
+      // 物化侧（`skills/official.ts` 的 `presetInjectsPresetSkills`）此时返回 `false`：
+      // 两边取舍不同是有意的 —— 兼容页是"检测报告"，判定不了就不下结论；技能页要**列条目**，
+      // 列一个不存在的技能比少列更糟。
+      // 与技能页**同一份**读取口径（`readHostPresetComposition` 会按两个包来源依次找）。
+      // 早先这里自己拼 `join(hostRoot, 'dsh-web-app', ...)`：同一台机器上可能读到另一个副本，
+      // 于是「技能页列了、兼容页说没接」两边矛盾，谁也说不清哪个对。
+      const composition = readHostPresetComposition(presetId)
+      const wired: boolean | null = composition === null ? null : presetCompositionWiresPresetSkills(composition)
       out.push(names.length === 0
         ? {
             id: 'official-preset-skills', label: '官方预设技能资产', kind: 'read',

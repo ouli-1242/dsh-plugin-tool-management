@@ -546,8 +546,12 @@ export const CAPABILITY_SPECS: readonly CapabilitySpec[] = [
       try {
         prepared = (prepareCall as (...args: unknown[]) => unknown).call(t, { provider: '', model: '', temperature: 0, maxTokens: 1 })
       } catch (error) {
-        // 空 provider / model 被拒是**预期**（说明它在校验参数），不算契约漂移。
-        if (error instanceof TypeError) return `prepareCall() 抛 TypeError：${String((error as Error)?.message ?? error)}`
+        // 抛错本身**不是**契约漂移的证据：这里传的是空 provider / model，被参数校验拒掉
+        // 是预期行为。早先把 `TypeError` 当成形状不符上报 —— 而空参数恰好最常触发
+        // `TypeError`（读 `undefined.foo`），于是每次「重新检测」都会凭空多一条降级。
+        //
+        // 真正的判据是**返回值形状**，而它在抛错路径上根本拿不到。所以这里一律放过：
+        // 宁可漏报一次（宿主真变了的话，复习跑起来会自己报错），也不要把正常宿主标红。
         return undefined
       }
       if (prepared !== null && typeof prepared === 'object' && typeof (prepared as { then?: unknown }).then === 'function') {

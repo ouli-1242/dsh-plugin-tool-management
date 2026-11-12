@@ -201,8 +201,17 @@ export function setOfficialPresetId(id: string | undefined): void {
   if (clean !== "") officialPresetId = clean;
 }
 
-/** 宿主某个预设的组合文本；取不到返回 null。 */
-function readHostPresetComposition(presetId: string): string | null {
+/**
+ * 宿主某个预设的组合文本；取不到返回 null。
+ *
+ * 按**两个包来源**依次找（桌面安装目录、解析到的 node_modules）。兼容页曾经自己拼
+ * `join(hostRoot, 'dsh-web-app', ...)`，与这里可能读到不同的副本 —— 同一台机器上
+ * 「技能页说接了、兼容页说没接」就是这么来的。判定只留这一份。
+ *
+ * @param presetId - 预设 id。
+ * @returns 组合文本；两个来源都读不到时为 null。
+ */
+export function readHostPresetComposition(presetId: string): string | null {
   const subpath = `presets/${presetId}.patch.yml`;
   for (const path of [
     desktopPackageDir("@deepseek-ai/dsh-web-app", subpath),
@@ -234,12 +243,18 @@ export function presetCompositionWiresPresetSkills(text: string): boolean {
 /**
  * 宿主这个预设有没有把预设技能目录接进会话上下文。
  *
+ * 读不到组合文件时返回 `false`（**不列**）。
+ *
+ * 早先按「接了」处理，理由是保守多列 —— 但方向反了：列出来的条目会被当成"宿主真的注入
+ * 了这份技能"，用户据此启停一个**根本不存在于上下文**的技能，界面显示开着、模型看不到。
+ * 而漏列的代价只是少一行提示，用户还能在技能页看到官方目录里的真实技能。
+ *
  * @param presetId - 预设 id。
- * @returns 接了返回 true；读不到组合文件时按「接了」处理（保守多列）。
+ * @returns 组合文件明确接了才返回 true。
  */
 function presetInjectsPresetSkills(presetId: string): boolean {
   const text = readHostPresetComposition(presetId);
-  if (text === null) return true;
+  if (text === null) return false;
   return presetCompositionWiresPresetSkills(text);
 }
 
@@ -480,28 +495,31 @@ function copyPresetSkills(from: string, to: string): void {
 
 /** 官方内置技能的只读来源；materialize 不出真实目录时返回 null（不凭空列出）。 */
 export function officialSkillRoot(): SkillSource | null {
+  // **只缓存成功结果**。
+  //
+  // 早先连 `null` 一起缓存：物化失败一次（官方包在启动后才就位、或那一次拷贝碰到权限
+  // 问题）之后，整个进程生命周期里「官方内置」整组都不会再出现，用户看不到也修不了，
+  // 只能重启。物化本身是幂等的，失败后重试的代价只是一次目录拷贝。
   if (officialRootCache !== undefined) return officialRootCache;
   const dir = materializeOfficialSkills();
-  officialRootCache =
-    dir === null
-      ? null
-      : {
-          key: OFFICIAL_SOURCE_KEY,
-          path: dir,
-          label: "官方内置",
-          localeKey: "official",
-          mutable: false,
-          deletable: false,
-          // 来源层无开关（同默认来源），单个技能可启停；脚本从物化副本的真实路径执行。
-          //
-          // rank 只决定**本 provider 内部**同名候选的先后（官方 599 排在 hub / dsh / agents
-          // 之后，被用户自己的同名技能盖住）。对宿主官方 provider 的接管不靠数字：
-          // 全局层由宿主自己提供官方技能，我们只在每个 agent 的 scoped 层里注册同一份候选，
-          // 层优先级「最近一层胜出」直接压过全局层 —— 官方改 rank 常量不会让接管失效。
-          toggleable: true,
-          native: false,
-          scope: "user",
-          rank: 599,
-        };
+  if (dir === null) return null
+  officialRootCache = {
+    key: OFFICIAL_SOURCE_KEY,
+    path: dir,
+    label: "官方内置",
+    localeKey: "official",
+    mutable: false,
+    deletable: false,
+    // 来源层无开关（同默认来源），单个技能可启停；脚本从物化副本的真实路径执行。
+    //
+    // rank 只决定**本 provider 内部**同名候选的先后（官方 599 排在 hub / dsh / agents
+    // 之后，被用户自己的同名技能盖住）。对宿主官方 provider 的接管不靠数字：
+    // 全局层由宿主自己提供官方技能，我们只在每个 agent 的 scoped 层里注册同一份候选，
+    // 层优先级「最近一层胜出」直接压过全局层 —— 官方改 rank 常量不会让接管失效。
+    toggleable: true,
+    native: false,
+    scope: "user",
+    rank: 599,
+  };
   return officialRootCache;
 }
