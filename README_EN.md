@@ -126,7 +126,7 @@ More than a version number:
 - **Upgrade diff**: per-package versions for cordis, the 11 peers and 15 runtime-only official packages against the verified baseline (out-of-range peers become blockers), plus canaries for event names, session-directory layout, patch dialect, MCP config keys and tool argument schemas, prompt section ordering, client UI slots and official skill assets.
 - **Access token**: set / disable / change / delete; writes and plaintext secrets go through it.
 - **Scope**: all global / per workspace / per conversation.
-- **Injection**: seven domain switches (global and workspace memory separate), minimal-preset fallback, catalog caps for skills / MCP / subagents (overflow folds into a one-line count; per-entry description length is configurable too), the two slash-menu entries, sidebar entry.
+- **Injection**: switches for seven domains (global and workspace memory share one switch in the UI), minimal-preset fallback, catalog caps for skills / MCP / subagents (overflow folds into a one-line count; per-entry description length is configurable too), the two slash-menu entries, sidebar entry.
 - **Model tools**: per-tool visibility for 22 tools, plus `memory_note` following the autonomous-memory master switch; saved per layer.
 - **Maintenance**: old-backup cleanup, feature overview, recent changes.
 
@@ -142,7 +142,7 @@ More than a version number:
 | Recycle bins (skills / memories / personas / presets / scenes) | `~/.dsh/tool-management/trash/<domain>-trash/`                               |
 | Archive ledger / retention                                     | `~/.dsh/tool-management/history-*.json`                                      |
 | MCP sidecars (disabled tools / known tools / notes / settings) | `~/.dsh/tool-management/mcp-*.json`                                          |
-| Injection settings (seven domain switches · catalog caps)     | `~/.dsh/tool-management/inject-settings.json`                                |
+| Injection settings (domain switches · catalog caps)           | `~/.dsh/tool-management/inject-settings.json`                                |
 | Model-tool table / scope overrides                             | `~/.dsh/tool-management/tool-table.json` · `scope-overrides.json`            |
 | Runtime log / patch backups                                    | `~/.dsh/tool-management/tool-management.log` · `backups/`                    |
 
