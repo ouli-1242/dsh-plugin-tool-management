@@ -29,6 +29,18 @@ import { LIST_LIMIT_MAX, effectiveScope, existingNote, globalActionNote, globalU
 import { PROACTIVE_MEMORY_TOOL } from './table.js'
 import { isNoteRef, noteRefOf, stripNoteRef } from './note-ref.js'
 
+/** 自主记忆当前开启的层；`false` 的层不向模型暴露。 */
+export interface NoteLayers {
+  global: boolean
+  workspace: boolean
+}
+
+/** 记忆工具装配后的可刷新句柄。 */
+export interface MemoryToolsHandle {
+  /** 按最新设置重算 `memory_note` 的 `layer` 参数（设置写入后调用）。 */
+  refreshNoteSchema(): void
+}
+
 /** 记忆工具域要的宿主能力：记忆 op 表与场景记录。 */
 export interface MemoryToolDeps extends ToolDomainDeps {
   /** rules service 的 ops 表：rules-list / rules-read / rules-create / rules-update / rules-toggle。 */
@@ -44,6 +56,14 @@ export interface MemoryToolDeps extends ToolDomainDeps {
   autoNotesReadable?: (agent: unknown) => boolean
   /** 这个 agent 现在能不能主动学（三级开关 + depth + 会话 id 是否可作目录名）。 */
   autoLearnEnabled?: (agent: unknown) => boolean
+  /**
+   * 当前生效的自主记忆层；省略 = 两层都按开处理（旧装配 / 测试）。
+   *
+   * 传 `undefined` 时取全局设置：`memory_note` 的工具 schema 只有一份，不能按会话变。
+   */
+  autoNoteLayers?: (agent?: unknown) => NoteLayers
+  /** 读侧实际开启的层（子代理按父会话作用域）；省略时退回 `autoNoteLayers`。 */
+  autoNoteReadLayers?: (agent: unknown) => NoteLayers
   /** 当前启用的场景名（写入路由要它判"该不该落场景层"）。 */
   activeSceneOf?: (agent: unknown) => string | undefined
   /**
@@ -74,7 +94,7 @@ export interface MemoryToolDeps extends ToolDomainDeps {
 
 
 /** 注册记忆域的 model 工具（列表 / 读取 / 检索 / 切换 / 保存）。 */
-export function buildMemoryTools(deps: MemoryToolDeps): void {
+export function buildMemoryTools(deps: MemoryToolDeps): MemoryToolsHandle {
   const { defineTool, register } = deps
   /**
    * 运行时点名自主笔记工具：它不在工具表里时退回中性说法。
@@ -97,6 +117,31 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     const fn = table[name]
     if (typeof fn !== 'function') throw new Error('missing op: ' + name + ' (the plugin is only partly assembled)')
     return fn
+  }
+
+  // 开关决定能力面：关掉的层连 `layer` 参数都不该出现。省略依赖时按两层都开处理，
+  // 让旧装配 / 单元测试保持原行为。
+  const noteLayersOf = (agent?: unknown): NoteLayers => {
+    const got = deps.autoNoteLayers ? deps.autoNoteLayers(agent) : undefined
+    return got ?? { global: true, workspace: true }
+  }
+  const noteReadLayersOf = (agent: unknown): NoteLayers => {
+    const got = deps.autoNoteReadLayers
+      ? deps.autoNoteReadLayers(agent)
+      : deps.autoNoteLayers ? deps.autoNoteLayers(agent) : undefined
+    return got ?? { global: true, workspace: true }
+  }
+  // 只有两层都开时层才是模型要选的东西；只剩一层时强制那一层，schema 里不留 `layer`。
+  const noteLayerParameter = {
+    type: 'string',
+    enum: ['global', 'workspace'],
+    description: 'global = every project; workspace = this project. Omit when unsure: the user chooses the layer on the card, or its default applies.',
+  }
+  const applyNoteLayerSchema = (tool: any, layers: NoteLayers): void => {
+    const properties = tool && tool.parameters && tool.parameters.properties
+    if (!properties) return
+    if (layers.global && layers.workspace) properties.layer = noteLayerParameter
+    else delete properties.layer
   }
 
   /**
@@ -233,13 +278,14 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
     return lines.join('\n')
   }
 
-  const noteCatalogText = async (all: boolean, limit: number): Promise<string> => {
+  const noteCatalogText = async (all: boolean, limit: number, layers: NoteLayers): Promise<string> => {
     if (!evo) return ''
     const r: any = await opOf(evo, 'evolution-list')({ all })
     if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to read agent notes'))
-    const rows: any[] = Array.isArray(r.entries) ? r.entries : []
+    const rows: any[] = (Array.isArray(r.entries) ? r.entries : [])
+      .filter((e: any) => e.layer === 'workspace' ? layers.workspace : layers.global)
     const shown = rows.slice(0, limit)
-    const order = ['workspace', 'global']
+    const order = ['workspace', 'global'].filter((l) => l === 'workspace' ? layers.workspace : layers.global)
     const lines: string[] = []
     for (const layer of order) {
       const group = shown.filter((e) => e.layer === layer)
@@ -262,26 +308,30 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
           (e.oneLine ? ' — ' + String(e.oneLine) : ''))
       }
     }
+    // 总数只在两层都开时可信：只剩一层时 `r.total` 含已关层的条目，报出来就是泄漏。
+    const both = layers.global && layers.workspace
     const head = 'agent notes: ' + rows.length + ' listed' +
-      (r.total !== undefined ? ' / ' + r.total + ' in catalog' : '') +
+      (both && r.total !== undefined ? ' / ' + r.total + ' in catalog' : '') +
       (rows.length > shown.length ? ' (showing ' + shown.length + ', raise limit for more)' : '')
     return head + '\n' + (lines.join('\n') || '(none)')
   }
 
-  const noteSearchText = async (query: string, limit: number): Promise<string> => {
+  const noteSearchText = async (query: string, limit: number, layers: NoteLayers): Promise<string> => {
     if (!evo) return ''
     // 与用户记忆搜索同口径：搜索覆盖归档 / 未注入的条目，`all` 只影响清单。
     // 带正文：`oneLine` 只是压平后按 160 宽度截断的摘要，只搜它等于搜不到正文后半截。
     const r: any = await opOf(evo, 'evolution-list')({ all: true, withBody: true })
     if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to read agent notes'))
     const words = query.toLowerCase().split(/\s+/).filter((w) => w !== '')
-    const rows: any[] = (Array.isArray(r.entries) ? r.entries : []).filter((e: any) => {
-      // `kind` 也要能搜：结果行里印着它（「列出所有做法类笔记」是很自然的请求），
-      // 只显示不索引等于「看得见、搜不到」。类型是四个固定词，不会污染正文匹配。
-      const hay = [e.id, e.key, e.title, e.oneLine, e.body, e.boundary, e.alias, e.kind]
-        .map((x) => String(x || '').toLowerCase()).join(' ')
-      return words.every((w) => hay.includes(w))
-    })
+    const rows: any[] = (Array.isArray(r.entries) ? r.entries : [])
+      .filter((e: any) => e.layer === 'workspace' ? layers.workspace : layers.global)
+      .filter((e: any) => {
+        // `kind` 也要能搜：结果行里印着它（「列出所有做法类笔记」是很自然的请求），
+        // 只显示不索引等于「看得见、搜不到」。类型是四个固定词，不会污染正文匹配。
+        const hay = [e.id, e.key, e.title, e.oneLine, e.body, e.boundary, e.alias, e.kind]
+          .map((x) => String(x || '').toLowerCase()).join(' ')
+        return words.every((w) => hay.includes(w))
+      })
     const shown = rows.slice(0, limit)
     const lines = shown.map((e: any) => '- ' + noteRefOf(String(e.id)) + ' · ' + String(e.status || 'active') +
       (e.kind ? ' · ' + String(e.kind) : '') +
@@ -466,7 +516,8 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       // 自主记忆关着时，笔记不在这份清单里出现：功能没开，模型不该看到「有笔记可读」
       // 这种半开状态（直接给 note: id 仍然读得到 —— 那是显式请求）。
       const readable = deps.autoNotesReadable ?? deps.autoLearnEnabled
-      const notesOn = Boolean(evo && readable && readable(exec && exec.agent))
+      const readLayers = noteReadLayersOf(exec && exec.agent)
+      const notesOn = Boolean(evo && readable && readable(exec && exec.agent) && (readLayers.global || readLayers.workspace))
       if (kind === 'note' && !notesOn) {
         throw new Error('autonomous memory is off here, so agent notes are not available. The user can turn it on in Memory → Autonomous memory.')
       }
@@ -477,7 +528,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
           : await userCatalogText(all, limit, scene, exec))
       }
       if (kind !== 'memory' && notesOn) {
-        sections.push(query !== '' ? await noteSearchText(query, limit) : await noteCatalogText(all, limit))
+        sections.push(query !== '' ? await noteSearchText(query, limit, readLayers) : await noteCatalogText(all, limit, readLayers))
       }
       return sections.filter((s) => s !== '').join('\n\n') || '(none)'
     },
@@ -871,12 +922,12 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
   // 与用户记忆分开的另一点是**对象**：笔记是一句话、按层（global / workspace）走；
   // 用户记忆是多段、按场景走。读取统一走 `memory_get`，这里只保留写入与删除。
   // 弹卡策略：自动确认关 → 每次都问；开 → 不弹卡，由 agent 决定。生效判断在 gates 的 `autoActive`。
-  if (!deps.evolutionOps || !deps.autoLearnEnabled) return
+  if (!deps.evolutionOps || !deps.autoLearnEnabled) return { refreshNoteSchema() {} }
   const noteOps = deps.evolutionOps
 
-  register(defineTool({
+  const noteToolDef = defineTool({
     name: PROACTIVE_MEMORY_TOOL,
-    description: 'Agent notes (autonomous memory) — one-line notes YOU decided are worth keeping across conversations: a preference, a fact, a correction of your behaviour, or a repeatable procedure. Use this for your own judgement; when the user explicitly asks you to remember something, use memory_remember instead (that is their asset, this is your cache).\n\nWrite it in one call and move on. If a call is refused, the reply names every problem at once — fix them in one retry, or drop the note and get back to the task. Do not reword the same idea repeatedly: a note that keeps failing is one the user did not need.\n\nRecord what will still hold in a different conversation, and nothing else:\n- A one-off ("this time", "for now", "next step") is not a note.\n- Something re-derivable from the code or config (dependency versions, file lists, config values) is not a note — read the file instead.\n- Say the thing itself, in words. Fragments, markup, and pure punctuation are refused.\n\nlearn: `title` (2-8 words) + `text` (<=1200 Chinese chars / 2400 letters; 1-2 clear sentences, or follow the style line in the learned-notes section); `kind` — preference / fact / correction / procedure (it sets the review interval: fact and procedure are re-checked after 30 days, preference and correction never expire, so a procedure filed as a correction stays forever); `layer` global = every project / workspace = this one; pass `slot` (a stable name) when you may update or forget it later; pass `quote` (their exact words) when you are recording something the user actually said — it is checked verbatim against this conversation, and if it does not match the note is still saved but with weaker evidence, so quote exactly when you can.\n\nEvery note shows the user a card unless they turned auto-confirm on. Check for an existing note on the same thing first (the memory read tool with kind=note lists them) — two notes saying the same thing in different words are both injected into every later conversation, and the duplicate check compares wording, not meaning. forget: `note` = id (note:...), slot, title, or the first line as it was injected. Inspect notes with the memory read tool.',
+    description: 'Agent notes (autonomous memory) — one-line notes YOU decided are worth keeping across conversations: a preference, a fact, a correction of your behaviour, or a repeatable procedure. Use this for your own judgement; when the user explicitly asks you to remember something, use memory_remember instead (that is their asset, this is your cache).\n\nWrite it in one call and move on. If a call is refused, the reply names every problem at once — fix them in one retry, or drop the note and get back to the task. Do not reword the same idea repeatedly: a note that keeps failing is one the user did not need.\n\nRecord what will still hold in a different conversation, and nothing else:\n- A one-off ("this time", "for now", "next step") is not a note.\n- Something re-derivable from the code or config (dependency versions, file lists, config values) is not a note — read the file instead.\n- Say the thing itself, in words. Fragments, markup, and pure punctuation are refused.\n\nlearn: `title` (2-8 words) + `text` (<=1200 Chinese chars / 2400 letters; 1-2 clear sentences, or follow the style line in the learned-notes section); `kind` — preference / fact / correction / procedure (it sets the review interval: fact and procedure are re-checked after 30 days, preference and correction never expire, so a procedure filed as a correction stays forever); pass `slot` (a stable name) when you may update or forget it later; pass `quote` (their exact words) when you are recording something the user actually said — it is checked verbatim against this conversation, and if it does not match the note is still saved but with weaker evidence, so quote exactly when you can.\n\nEvery note shows the user a card unless they turned auto-confirm on. Check for an existing note on the same thing first (the memory read tool with kind=note lists them) — two notes saying the same thing in different words are both injected into every later conversation, and the duplicate check compares wording, not meaning. forget: `note` = id (note:...), slot, title, or the first line as it was injected. Inspect notes with the memory read tool.',
     parameters: {
       action: { type: 'string', enum: ['learn', 'forget'], required: true, description: 'learn or forget.' },
       // ── learn ──
@@ -885,7 +936,6 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       quote: { type: 'string', description: 'learn: the user\'s exact words, copied verbatim, when you are recording something they said. Checked against this conversation; a quote that does not match does not fail the call — the note is kept with weaker evidence. Omit it for your own inferences.' },
       slot: { type: 'string', description: 'learn: optional stable slot name; learning again with the same slot merges when it says the same thing, and replaces the old note when it conflicts.' },
       boundary: { type: 'string', description: 'learn: optional; when it may not hold.' },
-      layer: { type: 'string', enum: ['global', 'workspace'], description: 'learn: global (every project) or workspace (this project). Omit only when unsure; the card asks, or auto-confirm uses the default.' },
       ttlDays: { type: 'number', description: 'learn: optional; re-check after N days.' },
       // `kind` 决定保质期（事实 / 做法 30 天后提醒复核，偏好 / 纠正不过期）。不给时由
       // `inferKind` 按措辞猜，而它只能看字面 —— 「必须 / 不要」这类约束词会把做法误判成
@@ -939,6 +989,22 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
 
       if (action !== 'learn') throw new Error('unknown action: ' + action + ' (expected learn / forget)')
 
+      const layers = noteLayersOf(agent)
+      const onlyLayer = layers.global && !layers.workspace ? 'global'
+        : layers.workspace && !layers.global ? 'workspace' : undefined
+      const askedLayer = args && typeof args.layer === 'string' ? args.layer : ''
+      if (askedLayer !== '') {
+        if (askedLayer !== 'global' && askedLayer !== 'workspace') {
+          throw new Error('unknown layer: ' + askedLayer + ' (expected global / workspace)')
+        }
+        // 关掉的层在模型眼里不该存在。显式点名它时拒绝而不是悄悄落到另一层 ——
+        // 静默改层会让模型以为自己记到了它说的那一层。
+        if (!(askedLayer === 'global' ? layers.global : layers.workspace)) {
+          throw new Error('the ' + askedLayer + ' autonomous-memory layer is off here, so nothing was done. The user can turn it on in Memory → Autonomous memory' +
+            (onlyLayer !== undefined ? ', or omit layer to use the enabled ' + onlyLayer + ' layer.' : '.'))
+        }
+      }
+
       // save 的参数串进来时（`body` / `memory`），直接指回用户记忆，
       // 别让一次完整记忆被当成一句话笔记丢掉。
       if (args && (args.body !== undefined || args.memory !== undefined)) {
@@ -974,6 +1040,8 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       for (const key of ['title', 'quote', 'boundary', 'layer', 'ttlDays', 'kind'] as const) {
         if (args && args[key] !== undefined && args[key] !== '') payload[key] = args[key]
       }
+      // 只剩一层时替模型定层：schema 里没有 `layer`，路由与卡片都需要一个确定值。
+      if (onlyLayer !== undefined && (args.layer === undefined || args.layer === '')) payload.layer = onlyLayer
       // `slot` 是模型面的名字；op 的字段仍是 `key`（同 slot 合并）。`key` 作为旧名兼容一次。
       const slot = String((args && (args.slot !== undefined ? args.slot : args.key)) || '')
       if (slot !== '') payload.key = slot
@@ -1062,7 +1130,10 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
       if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to record it'))
       return learnReceipt(r, 'approved', payload)
     },
-  }))
+  })
+  applyNoteLayerSchema(noteToolDef, noteLayersOf())
+  register(noteToolDef)
+  return { refreshNoteSchema() { applyNoteLayerSchema(noteToolDef, noteLayersOf()) } }
 }
 
 /**

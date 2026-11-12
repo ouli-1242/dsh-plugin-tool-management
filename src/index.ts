@@ -2495,6 +2495,37 @@ export default {
     }
 
     /**
+     * 当前实际开启的自主记忆层。`agent` 省略时取全局设置 —— `memory_note` 的工具 schema
+     * 只有一份，不能按会话变；具体会话的层由执行侧再判一次。
+     */
+    function autoNoteLayersFor(agent?: unknown): { global: boolean; workspace: boolean } {
+      try {
+        const identity = agent === undefined ? null : sessionIdentityOf(agent)
+        if (agent !== undefined && identity === null) return { global: false, workspace: false }
+        const scopeKey = identity?.cwd ? workspaceMemoryKeyOf(identity.cwd) : undefined
+        const cfg = evolutionRuntime.effectiveSync(scopeKey, identity?.sessionId)
+        return { global: cfg.learnGlobal === true, workspace: cfg.learnWorkspace === true }
+      } catch {
+        return { global: false, workspace: false }
+      }
+    }
+
+    /** 读侧实际开启的层：子代理按父会话作用域判，与 `autoNotesReadableFor` 同口径。 */
+    function autoNoteReadLayersFor(agent: unknown): { global: boolean; workspace: boolean } {
+      try {
+        const identity = sessionIdentityOf(agent)
+        if (identity === null) return { global: false, workspace: false }
+        const sid = sessionScopeIdOf(agent) ?? identity.sessionId
+        const cwd = identity.cwd ?? sessionCwdOfId(sid)
+        const scopeKey = cwd ? workspaceMemoryKeyOf(cwd) : undefined
+        const cfg = evolutionRuntime.effectiveSync(scopeKey, sid)
+        return { global: cfg.learnGlobal === true, workspace: cfg.learnWorkspace === true }
+      } catch {
+        return { global: false, workspace: false }
+      }
+    }
+
+    /**
      * 弹卡等待上限（毫秒），**按本会话里「连续没被回答」的次数**递减。
      *
      * 一次都没超时过 → 5 分钟：足够读完一条笔记再做决定。
@@ -4998,6 +5029,8 @@ export default {
     // 冷路径的句柄：op 表先于 `attachColdPath` 装配（开关打开前界面也要能查队列），
     // 所以这里先留一个可变槽，装配完再填。op 里拿到的是 getter 的**当前值**。
     let coldHandle: ReturnType<typeof attachColdPath> | null = null
+    // 设置写入后重算 `memory_note` 的 `layer` 参数；工具装配晚于 op 表，先用可变槽。
+    let refreshMemoryNoteSchema: (() => void) | null = null
     // 维护扫描同样晚于 op 表创建（它依赖 episode 存储）。用同样的可变槽，
     // op 里取到的是**装配完成后**的实例，不会出现"界面上那份是空壳"。
     let sweepRunner: ((opts?: { dry?: boolean }) => Promise<SweepReport>) | null = null
@@ -5181,6 +5214,8 @@ export default {
       // 不通知就得等下一次无关的 tools/change（用户会看到"开关开了，模型还摸不到工具"）。
       onSettingsChanged: () => {
         try { mcp.scheduleToolRestrictions() } catch { /* 装配期 manager 还没好：下一次事件补上 */ }
+        // 工具本身的可见性由上面那条重算；它内部的 `layer` 参数还要按层重算一遍。
+        try { refreshMemoryNoteSchema?.() } catch { /* 工具还没装配：注册时按当时设置算 */ }
       },
       message,
     })
@@ -6423,7 +6458,7 @@ export default {
         : (promptOps['agentsmd-unapply'] as () => Promise<{ ok: boolean; error?: string; removed?: boolean }>)()
     }
     buildPromptTools({ ...toolDeps, promptOps: auditOps(promptOps), applyPresetGuarded: applyPresetForModel, unapplyPreset: unapplyPresetForModel, promptsDir })
-    buildMemoryTools({
+    const memoryTools = buildMemoryTools({
       ...toolDeps,
       rulesOps: auditOps(memoriesService.ops),
       // 自主笔记工具（learn / forget / list / read）：只有开关打开时才进工具表（见
@@ -6431,6 +6466,9 @@ export default {
       // 工具表是"模型看不看得见"，op 是"调得通调不通"，中间隔着一次模型采样。
       evolutionOps: auditOps(evolutionOpsTable),
       autoLearnEnabled: autoLearnEnabledFor,
+      // 层也是能力面：关掉的那层连参数与清单都不出现（两处都按生效配置判）。
+      autoNoteLayers: autoNoteLayersFor,
+      autoNoteReadLayers: autoNoteReadLayersFor,
       // 读不要求深度 0：子代理能看到父会话学到的笔记，但不能学、也不自动注入。
       autoNotesReadable: autoNotesReadableFor,
       // 真实会话身份：层必须用它，不能用作用域键（切粒度会让会话记忆互相串目录）。
@@ -6442,6 +6480,7 @@ export default {
       // 工具侧重算会让用户记忆与自主笔记落到不同的组。
       workspaceGroupOf,
     })
+    refreshMemoryNoteSchema = memoryTools.refreshNoteSchema
     // 场景族（tools/scene.ts）：列场景与档案（`_list`）+ 建场景 / 写档案 / 绑提示词（`_save`）
     // + 进入与退出（`_switch`）。
     // 传**包装后**的 `archiveService.ops`：`scene-archive-save` 与 `scene-mode-set` 都在本文件
