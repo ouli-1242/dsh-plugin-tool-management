@@ -15,8 +15,14 @@ export function isWideCodePoint(code: number): boolean {
     (code >= 0xfe30 && code <= 0xfe6f) ||
     (code >= 0xff00 && code <= 0xff60) ||
     (code >= 0xffe0 && code <= 0xffe6) ||
-    (code >= 0x1f300 && code <= 0x1f64f) ||
-    (code >= 0x1f900 && code <= 0x1f9ff) ||
+    // BMP 里的图形符号：☀ ✅ ⭐ ❤ 这类常见 emoji 不在补充平面，漏掉会让按宽度
+    // 截断的标题 / 摘要比上限多出几个单位。区间里有窄符号，按宽算只是把上限估严一点。
+    (code >= 0x2600 && code <= 0x27bf) ||
+    (code >= 0x2b00 && code <= 0x2bff) ||
+    // 补充平面上的图形符号整段按宽算：emoji 散落在几十个块里（火箭、乐器、棋子、
+    // 区域指示符、符号扩展……），只挑几段必然漏。区间内少量未分配码点按宽算是把上限
+    // 估严一点，不会把字符切坏。
+    (code >= 0x1f000 && code <= 0x1fbff) ||
     (code >= 0x20000 && code <= 0x3fffd)
   )
 }

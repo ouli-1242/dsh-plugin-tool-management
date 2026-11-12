@@ -17,7 +17,7 @@ import { appendFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { hubPath } from '../hub.js'
 import { writeFileAtomically, readIndex, writeIndex } from '../memories/index-io.js'
-import { catalogEntryOf, catalogPathOf, estimateTokens, normalizeCatalog, oneLineOf, type CatalogFile } from '../memories/catalog.js'
+import { catalogEntryOf, catalogPathOf, estimateTokens, isInjectableStatus, normalizeCatalog, oneLineOf, type CatalogFile } from '../memories/catalog.js'
 import {
   GLOBAL_SCENE, LAYER_GLOBAL, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE, SHARED_GROUP,
   isValidGroupPath, isValidGroupSegment, layerOfGroup, type MemoryLayer,
@@ -163,17 +163,6 @@ export interface LearnPreviewSuccess {
   mergeInto?: string
   supersedes: string[]
   note?: string
-  /**
-   * 不弹卡、直接落盘的模拟结果。工具据此决定「直接生效 / 弹卡 / 进候选」：
-   * `status === 'active' && autoActive` 才可以直接写；其余按 reviewCode 分流。
-   */
-  direct?: {
-    status: 'active' | 'candidate'
-    autoActive: boolean
-    tier: EvidenceTier
-    reviewCode?: ReviewCode
-    pendingReason?: string
-  }
 }
 
 export type LearnPreview = LearnPreviewSuccess | LearnFailure
@@ -233,6 +222,15 @@ export function createLearner(deps: LearnDeps) {
   // 仍按原来的临时目录跑），生产装配会把 notesRoot / indexDir 都指到 evolution/notes。
   const notesRoot = deps.notesRoot ?? deps.memoriesRoot
   const indexDir = deps.indexDir ?? deps.stateDir
+
+  /**
+   * catalog 最近一次没能更新的原因（`evolution-status` 读它，界面据此显示"目录降级"）。
+   *
+   * catalog 是**派生**数据：写不动时真相没变，注入与列表沿用上一份，下一次全量重建校正。
+   * 但它也是注入唯一的数据源，所以失败必须留下痕迹 —— 用户看到"记忆少了几条"时，
+   * 至少能分清是目录坏了还是记忆真的被删了。
+   */
+  let catalogDegraded: string | undefined
 
   /** 会话层目录名：sid 必须是合法段名，否则拒绝（回退会让两个会话共享同一目录）。 */
   function sessionSegmentOk(sid: string): boolean {
@@ -363,7 +361,8 @@ export function createLearner(deps: LearnDeps) {
       return { ok: false, code: 'bad-session', error: 'refused: this conversation id cannot be used as a directory name, so it cannot hold conversation-scoped notes. Use layer="workspace" instead.', gate: 'layer' }
     }
 
-    const read = await state.readFresh()
+    // 预览是只读 op：坏文件只报错，不留存副本（那要等真正的写路径来做）。
+    const read = await state.readFresh({ quarantine: false })
     if (!read.ok) return { ok: false, code: 'state-unreadable', error: read.error }
     const st = read.state
     const keyForTomb = (req.key ?? '').trim() !== '' ? String(req.key).trim() : deriveKey(text)
@@ -378,7 +377,7 @@ export function createLearner(deps: LearnDeps) {
     }
 
     const ctx = await buildGateContext(config, env, st)
-    const input = (layer?: MemoryLayer, mode: 'card' | 'direct' = 'card') => ({
+    const input = (layer?: MemoryLayer) => ({
       text,
       ...(req.kind !== undefined ? { kind: req.kind } : {}),
       ...(req.key !== undefined ? { key: req.key } : {}),
@@ -386,7 +385,7 @@ export function createLearner(deps: LearnDeps) {
       ...(layer !== undefined ? { layer } : req.layer !== undefined ? { layer: req.layer } : {}),
       ...(req.boundary !== undefined ? { boundary: req.boundary } : {}),
       ...(req.ttlDays !== undefined ? { ttlDays: req.ttlDays } : {}),
-      ...(mode === 'card' ? { approved: true } : { autoActive: true }),
+      approved: true,
     })
 
     const first = runGates(input(), ctx)
@@ -394,16 +393,6 @@ export function createLearner(deps: LearnDeps) {
     // 用户记忆冲突是卡片也解不开的：不必再按推荐层跑一遍。
     const chosen = first.reviewCode === 'user-conflict' ? first : runGates(input(first.layer), ctx)
     if (!chosen.ok) return { ok: false, code: 'gate', error: chosen.error, gate: chosen.gate, detail: chosen.detail }
-    // 直接落盘模拟：工具用它判断「不弹卡能不能生效」。与卡片模式分开跑，是因为
-    // `approved` 会压掉一些待确认理由（歧义 / 做法类），而自动生效不应该压掉它们。
-    const directOutcome = runGates(input(first.layer, 'direct'), ctx)
-    const direct = directOutcome.ok ? {
-      status: directOutcome.status,
-      autoActive: directOutcome.autoActive === true,
-      tier: directOutcome.tier,
-      ...(directOutcome.reviewCode !== undefined ? { reviewCode: directOutcome.reviewCode } : {}),
-      ...(directOutcome.pendingReason !== undefined ? { pendingReason: directOutcome.pendingReason } : {}),
-    } : undefined
 
     const allowed: MemoryLayer[] = []
     if (config.learnGlobal) allowed.push(LAYER_GLOBAL)
@@ -429,7 +418,6 @@ export function createLearner(deps: LearnDeps) {
       ...(chosen.mergeInto !== undefined ? { mergeInto: chosen.mergeInto } : {}),
       supersedes: chosen.supersedes,
       ...(chosen.note !== undefined ? { note: chosen.note } : {}),
-      ...(direct !== undefined ? { direct } : {}),
     }
   }
 
@@ -521,9 +509,12 @@ export function createLearner(deps: LearnDeps) {
     await writeIndex(indexDir, index)
 
     // ── ④ 取代旧的同 key 条目 ──
+    // 只有新条目自己会生效时才允许把生效中的旧说法换掉；两个候选之间不互相取代（并发下
+    // 用户可能刚恢复了那条旧说法，见 `markSuperseded`）。
     const superseded: string[] = []
+    const allowActiveTarget = pass.approved || pass.autoActive === true
     for (const oldId of pass.supersedes) {
-      const ok = await markSuperseded(oldId, id, st, nowIso, index)
+      const ok = await markSuperseded(oldId, id, st, nowIso, index, { allowActiveTarget })
       if (ok) superseded.push(oldId)
     }
     if (superseded.length > 0) await writeIndex(indexDir, index)
@@ -545,8 +536,10 @@ export function createLearner(deps: LearnDeps) {
       }
     }
 
-    // ── ⑥ catalog（派生数据：失败可忽略，下次重建会补） ──
-    await touchCatalog(id, pass, name, req, nowIso).catch(() => {})
+    // ── ⑥ catalog（派生数据：失败记成降级原因，下一次写操作恢复） ──
+    // 不再 `.catch()` 兜底：`touchCatalog` 自己把失败记成降级原因并返回，抛不出来；
+    // 外面再吞一次只会让"目录没更新"这件事连日志都留不下。
+    await touchCatalog(id, pass, name, req, nowIso)
 
     deps.invalidateSnapshot()
     // 日志里不落 `key` 原文：`deriveKey` 取的是正文前三个词，于是这个字段经常就是用户原话的
@@ -681,14 +674,19 @@ export function createLearner(deps: LearnDeps) {
     )
     st.entries[targetId] = entry
 
-    // 批准时可能还带着要取代的旧条目（跨层同 key / 相似说法）。合并目标自己不在其中，
-    // 但其余旧条目必须一起让位 —— 否则批准后两条矛盾的事实会同时注入。
+    // 批准 / 自动确认时可能还带着要取代的旧条目（跨层同 key / 相似说法）。合并目标自己
+    // 不在其中，但其余旧条目必须一起让位 —— 否则批准后两条矛盾的事实会同时注入。
+    //
+    // 自动确认（`autoActive`）与卡片批准同权：两条都算"用户已经决定这条生效"，都该清掉
+    // 旧说法。早先这里只认 `pass.approved`，于是自动确认路径合并后旧条目留在原地，
+    // 两条同 key 的矛盾说法一起注入 —— 默认开自动确认时这就是常态。
     const superseded: string[] = []
-    if (pass.approved && pass.supersedes.length > 0) {
+    if (pass.supersedes.length > 0) {
       const index = await readIndex(indexDir)
+      const allowActiveTarget = pass.approved || pass.autoActive === true
       for (const oldId of pass.supersedes) {
         if (oldId === targetId) continue
-        const ok = await markSuperseded(oldId, targetId, st, nowIso, index)
+        const ok = await markSuperseded(oldId, targetId, st, nowIso, index, { allowActiveTarget })
         if (ok) superseded.push(oldId)
       }
       if (superseded.length > 0) await writeIndex(indexDir, index)
@@ -700,7 +698,7 @@ export function createLearner(deps: LearnDeps) {
 
     // slot 传 `nextKey`：catalog 的 `key` 是 `memory_note` 反查 slot 的依据，写 `pass.key`
     // 会与文件里的 `auto_key` 分家 —— 下次全量重建又漂回去，期间按 slot 找不到这条。
-    await touchCatalog(targetId, pass, name, req, nowIso, nextStatus, nextKey).catch(() => {})
+    await touchCatalog(targetId, pass, name, req, nowIso, nextStatus, nextKey)
     deps.invalidateSnapshot()
     return {
       ok: true,
@@ -719,13 +717,21 @@ export function createLearner(deps: LearnDeps) {
     }
   }
 
-  /** 旧条目改 `auto_status: superseded`。失败只记日志 —— 新条目已经生效，旧的留着也只是多一行。 */
+  /**
+   * 旧条目改 `auto_status: superseded`。失败只记日志 —— 新条目已经生效，旧的留着也只是多一行。
+   *
+   * @param opts.allowActiveTarget 新条目自己会不会生效。`false`（候选替换候选）时**不碰
+   *   已经生效的目标**：门禁看到的快照可能已经旧了，用户刚在记忆页恢复了那条旧说法，
+   *   这一笔再把它归档就等于撤销用户的动作。已经归档 / 已取代的目标同样跳过 ——
+   *   它们不再注入，替换没有收益，却会把一条可恢复的历史改成不可恢复。
+   */
   async function markSuperseded(
     oldId: string,
     newId: string,
     st: EvolutionState,
     nowIso: string,
     index: any,
+    opts: { allowActiveTarget: boolean },
   ): Promise<boolean> {
     const slash = oldId.lastIndexOf('/')
     if (slash <= 0) return false
@@ -734,6 +740,13 @@ export function createLearner(deps: LearnDeps) {
     const docPath = join(notesRoot, group, name + '.md')
     try {
       const text = await readFile(docPath, 'utf8')
+      const current = pickField(text, 'auto_status') || 'active'
+      if (!isInjectableStatus(current) && current !== 'candidate') return false
+      if (isInjectableStatus(current) && !opts.allowActiveTarget) return false
+      // 候选生成后用户把目标拨掉了（`setEnabled` 只改索引，不改文件里的 auto_status）：
+      // 这一笔不能再改写它。替换是为了让「两条矛盾说法」不再同时注入，而它已经不在注入，
+      // 此时归档它等于绕过用户刚做的开关动作。
+      if (index?.rules?.[oldId]?.enabled === false) return false
       await writeFileAtomically(
         docPath,
         rewriteFrontmatterFields(text, { auto_status: 'superseded', auto_superseded_by: newId, auto_updated: nowIso }),
@@ -757,6 +770,9 @@ export function createLearner(deps: LearnDeps) {
    *
    * `keyOverride`：合并路径要传目标文件里那个 `auto_key`。catalog 的 `key` 与 frontmatter
    * 必须同源 —— 分家之后，界面按 slot 找到的是旧值，而重建一次又漂回来。
+   *
+   * @returns 成败与原因。失败时**不写** catalog：读坏的目录不能拿空目录覆盖，那会把其余
+   *   条目一起抹掉，界面与注入都会变成"记忆全部消失"。
    */
   async function touchCatalog(
     id: string,
@@ -767,15 +783,24 @@ export function createLearner(deps: LearnDeps) {
     statusOverride?: string,
     keyOverride?: string,
     boundaryOverride?: string,
-  ): Promise<void> {
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
     const abs = catalogPathOf(deps.stateDir)
     let catalog: CatalogFile
     try {
       const raw = JSON.parse(await readFile(abs, 'utf8'))
       catalog = normalizeCatalog(raw)
-    } catch {
+    } catch (e) {
+      // ENOENT = 还没有这份目录（首次写入 / 用户删了）：从空目录起一份，其余条目等重建补。
+      if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        const reason = `catalog 读取失败，本次没有更新目录：${deps.message(e)}`
+        catalogDegraded = reason
+        // 视图缓存里可能还是"一切正常"的旧目录；作废它，状态页才看得见降级。
+        deps.invalidateSnapshot()
+        return { ok: false, error: reason }
+      }
       catalog = normalizeCatalog(null)
     }
+    const status = statusOverride ?? pass.status
     const prev = catalog.entries[id]
     // 合并路径保留原来的正文与标题；新建时用本次请求的正文（含边界行，与落盘同源）。
     // `oneLine` 只是列表摘要，注入用的是 `body`。
@@ -792,16 +817,31 @@ export function createLearner(deps: LearnDeps) {
       oneLine: prev?.oneLine ?? oneLineOf(pass.text),
       ...(title !== '' ? { title } : {}),
       ...(boundary !== '' ? { boundary } : {}),
-      status: statusOverride ?? pass.status,
+      status,
       kind: pass.kind,
       key: keyOverride ?? pass.key,
-      enabled: true,
+      // `enabled` 是**单条开关**，不是"会不会注入"：后者是 `enabled && isInjectableStatus(status)`，
+      // 两侧都要看。所以这里不能写死 true —— 合并路径确实会落到一条用户已经关掉的条目上
+      // （同 key 再说一遍），写死就等于替用户把它重新打开。沿用上一份卡片的开关，与索引里那份
+      // 是同一个真相（`setEnabled` / `setStatus` 会同时改两处）；新条目沿用索引口径（学完即开）。
+      // 层开关不折进来：它按会话解析，同一份目录会被不同会话读到，折进来必然失真。
+      enabled: prev?.enabled ?? true,
       hash: prev?.hash || textHashOf(pass.text),
       mtime: Date.parse(nowIso),
     })
     catalog.builtAt = nowIso
-    await mkdir(join(deps.stateDir, 'evolution'), { recursive: true })
-    await writeFileAtomically(abs, JSON.stringify(catalog, null, 2) + '\n', { mode: 0o600 })
+    try {
+      await mkdir(join(deps.stateDir, 'evolution'), { recursive: true })
+      await writeFileAtomically(abs, JSON.stringify(catalog, null, 2) + '\n', { mode: 0o600 })
+    } catch (e) {
+      const reason = `catalog 写入失败，本次只更新了正文与状态：${deps.message(e)}`
+      catalogDegraded = reason
+      deps.invalidateSnapshot()
+      return { ok: false, error: reason }
+    }
+    // 这一笔成功 = 目录可用；上一次的降级原因不再成立。
+    catalogDegraded = undefined
+    return { ok: true }
   }
 
   /**
@@ -810,16 +850,24 @@ export function createLearner(deps: LearnDeps) {
    * 为什么 forget / supersede / approve 必须自己改 catalog：注入只读 catalog，而这几条路径
    * 都不经过记忆域的写漏斗（`refresh()` 才会重建索引）。忘了却不改卡片 = **下一轮还在注入它**，
    * 用户删了个寂寞，还看不出为什么。
+   *
+   * @returns 成败与原因。未命中和异常都**不吞**：未命中说明目录已经落后于真相（记下降级，
+   *   等下一次全量重建）；异常带上条目标识与改动字段，状态页据此显示"目录降级"。
    */
   async function patchCatalogEntry(id: string, patch: Partial<{
     status: string; enabled: boolean; title: string; boundary: string; kind: AutoKind
     body: string; oneLine: string; bytes: number; estTokens: number; hash: string; mtime: number; size: number
-  }>): Promise<void> {
+  }>): Promise<{ ok: true } | { ok: false; error: string }> {
+    const op = Object.keys(patch).join('/') || 'status'
     try {
       const abs = catalogPathOf(deps.stateDir)
       const catalog = normalizeCatalog(JSON.parse(await readFile(abs, 'utf8')))
       const hit = catalog.entries[id]
-      if (!hit) return
+      if (!hit) {
+        const reason = `catalog 里没有 ${id}（${op}）：目录已落后于真相，等下一次重建`
+        catalogDegraded = reason
+        return { ok: false, error: reason }
+      }
       const next = { ...hit, ...patch }
       // 空标题 = 删掉这个键（normalizeCatalog 也只在有值时保留），别留一个空串。
       if (patch.title !== undefined) {
@@ -834,12 +882,16 @@ export function createLearner(deps: LearnDeps) {
       catalog.entries[id] = next
       catalog.builtAt = new Date().toISOString()
       await writeFileAtomically(abs, JSON.stringify(catalog, null, 2) + '\n', { mode: 0o600 })
-    } catch {
-      /* 派生数据：改不动就等下一次全量重建校正（服务写路径会重建） */
+      catalogDegraded = undefined
+      return { ok: true }
+    } catch (e) {
+      const reason = `catalog 更新失败（${id}，${op}）：${deps.message(e)}`
+      catalogDegraded = reason
+      return { ok: false, error: reason }
     }
   }
 
-  const demoteCatalog = (id: string, status: 'archived' | 'superseded'): Promise<void> =>
+  const demoteCatalog = (id: string, status: 'archived' | 'superseded') =>
     patchCatalogEntry(id, { status, enabled: false })
 
   /** 派生数据：从 catalog 里删掉一条（提升为用户记忆后，它不再归自动段管）。 */
@@ -851,8 +903,11 @@ export function createLearner(deps: LearnDeps) {
       delete catalog.entries[id]
       catalog.builtAt = new Date().toISOString()
       await writeFileAtomically(abs, JSON.stringify(catalog, null, 2) + '\n', { mode: 0o600 })
-    } catch {
-      /* 派生数据：下次全量重建会把它清掉（用户记忆不进 catalog） */
+      catalogDegraded = undefined
+    } catch (e) {
+      // 与 `patchCatalogEntry` 同一条口径：删不掉就别假装删了。catalog 里还留着它，
+      // 注入会继续发一条用户已经提升成手写记忆的内容 —— 这正是要看见的降级。
+      catalogDegraded = `catalog 删除失败（${id}）：${deps.message(e)}`
     }
   }
 
@@ -866,7 +921,9 @@ export function createLearner(deps: LearnDeps) {
       if (!read.ok) return { ok: false, code: 'state-unreadable', error: read.error }
       const st = read.state
       const slash = id.lastIndexOf('/')
-      if (slash <= 0) return { ok: false, code: 'bad-id', error: `not a memory id: ${id}` }
+      // 结尾的空文件名也按非法 id 拒掉：`join(root, 'global', '.md')` 读的是另一个路径，
+      // 找不到会报 not-found，用户拿到的错误与真实原因对不上。
+      if (slash <= 0 || slash === id.length - 1) return { ok: false, code: 'bad-id', error: `not a memory id: ${id}` }
       const group = id.slice(0, slash)
       const name = id.slice(slash + 1)
       const layer = layerOfGroup(group)
@@ -1020,7 +1077,7 @@ export function createLearner(deps: LearnDeps) {
             if (approvedLayer === LAYER_SESSION && e.session !== approvedSession) continue
             if (approvedLayer === LAYER_SCENE && e.scene !== undefined && e.scene !== group && e.scene !== SHARED_GROUP) continue
             if (e.status !== 'active' && e.status !== 'core' && e.status !== 'playbook') continue
-            await markSuperseded(e.id, id, st, nowIso, index)
+            await markSuperseded(e.id, id, st, nowIso, index, { allowActiveTarget: true })
           }
         } catch {
           /* 快照读不到就只确认这一条；旧的仍可由用户手动停用 */
@@ -1064,6 +1121,11 @@ export function createLearner(deps: LearnDeps) {
     opts: { reason?: string; pendingReason?: string | null; reviewDue?: string | null } = {},
   ): Promise<LearnResult | { ok: true; id: string; layer: MemoryLayer; status: 'active' | 'archived' | 'candidate'; tier: EvidenceTier; unchanged?: boolean }> {
     return deps.withWriteLock(async () => {
+      // 运行时兜底：TS 只在编译期挡住非法状态，而工具参数是外部输入。漏这一道就会把
+      // `auto_status: undefined` 写进文件，注入侧按不可注入状态静默丢弃。
+      if (status !== 'active' && status !== 'archived' && status !== 'candidate') {
+        return { ok: false, code: 'bad-status', error: `unknown status: ${String(status)}` }
+      }
       const read = await state.readFresh()
       if (!read.ok) return { ok: false, code: 'state-unreadable', error: read.error }
       const st = read.state
@@ -1368,7 +1430,8 @@ export function createLearner(deps: LearnDeps) {
       st.entries[keepId] = keepEntry
 
       const index = await readIndex(indexDir)
-      await markSuperseded(dropId, keepId, st, nowIso, index)
+      // 用户亲手点了「应用」：合并这件事已经决定，被并掉的那条即使是 active 也该退场。
+      await markSuperseded(dropId, keepId, st, nowIso, index, { allowActiveTarget: true })
       await writeIndex(indexDir, index)
       const written = await state.write(st)
       if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
@@ -1732,11 +1795,14 @@ export function createLearner(deps: LearnDeps) {
   }
 
   /**
-   * 用户点「复核」：清掉待复核标记，并把 `auto_updated` 重置到现在。
+   * 用户点「复核」：清掉待复核标记，并把复核时间记到 state。
    *
    * 两件事都要做。只清标记的话，下一次扫描会立刻按旧时间再挂一次 —— 用户会觉得
-   * "点了没反应"。`auto_updated` 就是扫描的计时起点（它由文件 mtime 兜底），
-   * 所以改写它等于把这一轮的 30 天重新起算。
+   * "点了没反应"。
+   *
+   * **不改 `auto_updated`**：复核没有动正文，把文件里的更新时间写成"现在"就是一句假话 ——
+   * 界面与 catalog 都会把一条没改过的记忆显示成"刚刚更新"。复核时间单独记在
+   * `reviewedAt` 里，维护扫描拿它与 `auto_updated` 较晚的一个当老化时钟。
    */
   async function markReviewed(id: string): Promise<LearnResult> {
     return deps.withWriteLock(async () => {
@@ -1754,13 +1820,13 @@ export function createLearner(deps: LearnDeps) {
         return { ok: false, code: 'superseded', error: `refused: "${id}" was replaced by a newer memory.` }
       }
       const nowIso = new Date().toISOString()
-      await writeFileAtomically(docPath, rewriteFrontmatterFields(text, { auto_updated: nowIso }))
       const read = await state.readFresh()
       if (!read.ok) return { ok: false, code: 'state-unreadable', error: read.error }
       const st = read.state
       const entry = st.entries[id]
       if (entry) {
         delete entry.reviewDue
+        entry.reviewedAt = nowIso
         bumpRevision(st)
         const written = await state.write(st)
         if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
@@ -1776,6 +1842,8 @@ export function createLearner(deps: LearnDeps) {
   return {
     learn, preview, forget, approve, setStatus, setEnabled, promote, organize, applyOrganize, describe, update,
     restoreFromTrash, purgeTrash, backfillTrash, noteInjected, noteRead, markReview, markReviewed,
+    /** 目录最近一次没更新成功的原因；`undefined` = 最近一笔写入没有留下降级。 */
+    catalogDegraded: (): string | undefined => catalogDegraded,
   }
 }
 
@@ -1829,7 +1897,9 @@ const normalizeForCompare = (s: string): string => String(s ?? '').toLowerCase()
 
 /** 默认 TTL：偏好/纠正活得久，事实与做法会过期。 */
 export function ttlDaysOf(kind: AutoKind, explicit?: number): number {
-  if (typeof explicit === 'number' && Number.isFinite(explicit) && explicit > 0) return Math.min(3650, Math.round(explicit))
+  // 下界取 1：`Math.round(0.4)` 会给出 0，而 0 天的 TTL 不是「立刻过期」而是让读侧的
+  // `Number(ttlDays) > 0` 判成"没配"，两处对同一条记忆的年龄判断就此分家。
+  if (typeof explicit === 'number' && Number.isFinite(explicit) && explicit > 0) return Math.max(1, Math.min(3650, Math.round(explicit)))
   // 与 `maintenance.ts` 的 `REVIEW_DAYS` 同值：写进 frontmatter 的 `auto_ttl_days` 就是
   // 「多久提醒一次复核」。偏好没有保质期（它只会被新偏好取代），这里仍给一个上限值 ——
   // 字段必须有数，而扫描侧对 `kind === 'preference'` 直接跳过。

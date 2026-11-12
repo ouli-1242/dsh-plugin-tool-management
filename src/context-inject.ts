@@ -575,7 +575,7 @@ export function createContextInjector(deps: ContextInjectorDeps): {
       const visibleIds = new Set<string>()
       const visible = newestDomainTexts(agent, PLUGIN_KINDS, visibleIds)
       // 两个判据各自抛异常时按"没有差异"处理：宁可这一轮沿用旧口径，也不能让整条注入通道
-      // 因为一次文件/目录计算失败而全线停摆（外层的 catch 会把八个域一起丢掉）。
+      // 因为一次文件/目录计算失败而全线停摆（外层的 catch 会把七个域一起丢掉）。
       let promptDiverged = false
       try { promptDiverged = deps.promptBaselineDiverged?.(agent) === true } catch { promptDiverged = false }
       const promptTakeover = promptDiverged || deps.promptOverrideActive?.(agent) === true || visible.has('prompt')

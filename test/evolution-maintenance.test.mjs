@@ -436,7 +436,7 @@ test('healthOf：按层统计，候选与归档分开算，过期数目单独给
   assert.equal(h.byLayer.global.active, 2)
   // active/core 的体积都算：w/a 10 + w/d 30 + g/a 10 + g/old 10。过期的也还在注入，所以也算。
   assert.equal(h.tokens, 60)
-  assert.equal(h.pendingReview, 1)
+  assert.equal(h.awaitingReview, 1)
   assert.equal(h.reviewDue, 1)
   assert.equal(h.expired, 1)
   assert.equal(h.total, 6)

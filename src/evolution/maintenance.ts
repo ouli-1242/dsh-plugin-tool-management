@@ -1,18 +1,21 @@
 // 维护扫描（P3）：把"记忆会自己变老"这件事从比喻变成一条可复现的规则。
 //
-// 三件事，按代价从低到高：
-//   1. episode / outbox 裁剪 —— 30 天前的轮次摘要没人会再看，留着只是让目录变大。
+// 四件事，按代价从低到高：
+//   1. episode / outbox 裁剪 —— 30 天前的轮次摘要没人会再看，这两个目录里的**派生数据**
+//      是真删的（`EPISODE_KEEP_DAYS`）；记忆正文不在其中。
 //   2. TTL 到期 —— 事实会过期（端口号、包管理器）：先**提醒**（30 天，继续注入），
 //      再久没人理才归档（90 天）。提醒不停用，是这一层的核心取舍，见 `planSweep`。
 //   3. 工作区失效 —— 目录拔了 90 天（移动硬盘 / 删了仓库），记忆留着只会占注入名额。
+//   4. 孤儿条目 —— 笔记文件被用户手动删掉后，catalog 里那条只剩一个指向空文件的记录。
 //
-// 一条纪律：**这套扫描只改状态，不删文件**。归档是可恢复的，删除不是；把两者混在一起，
-// 用户迟早会遇到"我的记忆自己消失了"。真正的删除只有 `forget`（带墓碑与回收站）。
+// 一条纪律：**扫描不删记忆正文**。裁剪只动 episode / outbox 这类可再生的原料；记忆条目
+// 一律改成 `archived`（可恢复），真删只有 `forget`（带墓碑与回收站）。把两者混在一起，
+// 用户迟早会遇到"我的记忆自己消失了"。
 //
 // 另一个纪律：**纯函数先出计划，再执行**。判断写在 `planSweep` 里，好测、可解释；
 // 执行只是把计划翻译成 `setStatus` 调用。否则"为什么它把我的记忆归档了"永远说不清。
 //
-// 已经删掉的两条，别再按"看起来该有"加回来：
+// 已经删掉的三条，别再按"看起来该有"加回来：
 //   - **会话层 GC**：写入路由只剩全局 / 工作区（见 `evolution/route.ts`），门禁第九道
 //     还会把残留的 session 层改写成工作区 —— 新数据里根本没有会话层条目。
 //   - **衰减**：它读的注入计数只在**渲染文本变化**时 +1，量的是"这个文件多久没被改过"，
@@ -51,8 +54,10 @@ export interface SweepEntry {
   tier: 'confirmed' | 'quoted' | 'inferred'
   tokens: number
   locked?: boolean
-  /** `auto_updated`，读不到时退回文件 mtime。 */
+  /** `auto_updated`（catalog 的 mtime）；**空串 = 读不到时间**，老化按"从没老过"处理。 */
   updatedAt: string
+  /** 用户最后一次点「复核」的时间（state 里的 `reviewedAt`）。与 `updatedAt` 取较晚者当老化时钟。 */
+  reviewedAt?: string
   /** 显式 TTL；0 / 缺失 = 按 kind 的默认值（见 `ttlDaysOf`）。 */
   ttlDays?: number
   kind?: string
@@ -94,9 +99,31 @@ export interface SweepOptions {
 
 const day = 86400_000
 
+/**
+ * 距今多少天。**读不到时间 → 0（当作"从没老过"）**。
+ *
+ * 这是保守方向：少归档一条，代价是它多留一阵；把读不到时间的条目当成很旧，则是
+ * 直接停用一条可能还在用的记忆。`updatedAt` 的空串就是"读不到"，与 `isoOfMtime`
+ * 的约定一致。
+ */
 const ageDaysOf = (iso: string | undefined, now: number): number => {
   const t = iso ? Date.parse(iso) : Number.NaN
   return Number.isFinite(t) ? Math.max(0, (now - t) / day) : 0
+}
+
+/**
+ * 老化时钟：正文改写时间与用户复核时间取**较晚**者。
+ *
+ * 复核不改正文，所以它不写文件的 `auto_updated`（那会变成假话：内容明明没改）；
+ * 它只重置"该再看一眼"的计时。两者的时间戳都在这里合流 —— 任一读不到就忽略它，
+ * 两个都读不到仍然按"从没老过"处理（与 `ageDaysOf` 同一条保守方向）。
+ */
+const agingDaysOf = (e: SweepEntry, now: number): number => {
+  const stamps = [e.updatedAt, e.reviewedAt]
+    .map((iso) => (iso ? Date.parse(iso) : Number.NaN))
+    .filter((t) => Number.isFinite(t))
+  if (stamps.length === 0) return 0
+  return Math.max(0, (now - Math.max(...stamps)) / day)
 }
 
 // playbook 有意排除：它是旧数据里"验证过 3 次 + 用户确认链"的成果，自动老化不该把它降回候选。
@@ -146,8 +173,9 @@ export function planSweep(entries: SweepEntry[], opts: SweepOptions = {}): { act
   //    归档（`archive`）只对**提醒过仍然没人理**的条目：`age >= archiveDays`，且
   //    `archiveDays > reviewDays`。没提醒过就归档等于跳过用户，那正是这一层要修掉的。
   //
-  //    时钟取 `updatedAt`（`auto_updated` / 文件 mtime）：它量的是"最后一次被改写"，
-  //    而「复核」与「编辑」都会改写它 —— 两者都是用户确认过这条仍然正确的动作。
+  //    时钟取「正文改写」与「用户复核」里较晚的那个（`agingDaysOf`）：前者是内容变了，
+  //    后者是用户确认这条仍然对 —— 两件事都不用再催。复核不改正文，所以它不写
+  //    `auto_updated`（那会让文件里的时间说谎），只记在 state 的 `reviewedAt` 里。
   for (const e of entries) {
     if (!isLive(e) || at.has(e.id)) continue
     // 偏好与纠正都没有保质期：它们只会被新的偏好 / 新的纠正取代，时间不是判据。
@@ -170,7 +198,7 @@ export function planSweep(entries: SweepEntry[], opts: SweepOptions = {}): { act
     const factor = (usedAtLeastOnce ? 2 : 1) * (trusted ? 2 : 1)
     const reviewAt = baseReview * factor
     const archiveAt = baseArchive * factor
-    const age = ageDaysOf(e.updatedAt, now)
+    const age = agingDaysOf(e, now)
     // **没提醒过就只提醒，不归档**。模块承诺是「先提醒、后归档」，而此前的判据只有年龄：
     // 一条从没被提醒过的 400 天旧记忆，第一次扫描就被停用 —— 用户没看到「待复核」，
     // 它就静默从上下文里消失了。现在只有已经挂着 `reviewDue` 的条目才够格归档。
@@ -332,6 +360,8 @@ export async function runSweep(deps: SweepDeps, opts: SweepOptions = {}): Promis
     }
   } else {
     try {
+      // 这里**真的删文件**，而且是有意的：episode 是每轮对话的派生摘要，只服务于尚未跑完的
+      // 复习项（`referencedEpisodes` 保证在用的不删），保留期之外没有读者。记忆正文不在此列。
       report.episodes = await deps.episodes.prune(EPISODE_KEEP_DAYS, now)
     } catch (e) {
       report.errors.push('episodes: ' + deps.message(e))
@@ -538,7 +568,7 @@ function expiredNow(e: SweepEntry, reviewDue: string | undefined, now: number): 
   const trusted = e.tier === 'confirmed'
   const baseReview = Number(e.ttlDays) > 0 ? Number(e.ttlDays) : REVIEW_DAYS
   const factor = (usedAtLeastOnce ? 2 : 1) * (trusted ? 2 : 1)
-  return ageDaysOf(e.updatedAt, now) >= baseReview * factor
+  return agingDaysOf(e, now) >= baseReview * factor
 }
 
 export function healthOf(entries: SweepEntry[], state: { entries: Record<string, { pendingReason?: string; reviewDue?: string }> }, now = Date.now()) {
@@ -547,7 +577,7 @@ export function healthOf(entries: SweepEntry[], state: { entries: Record<string,
     byLayer[layer] = { active: 0, candidate: 0, archived: 0, tokens: 0 }
   }
   let tokens = 0
-  let pendingReview = 0
+  let awaitingReview = 0
   let reviewDue = 0
   let expired = 0
   for (const e of entries) {
@@ -559,7 +589,7 @@ export function healthOf(entries: SweepEntry[], state: { entries: Record<string,
       tokens += e.tokens
     } else if (e.status === 'archived' || e.status === 'superseded') row.archived++
     else row.candidate++
-    if (state.entries[e.id]?.pendingReason) pendingReview++
+    if (state.entries[e.id]?.pendingReason) awaitingReview++
     if (state.entries[e.id]?.reviewDue) reviewDue++
     // 「过期」= **这一轮真的会被提醒**的条数。判据必须与 `planSweep` 逐条对齐，否则界面上
     // 那个数字无法与维护动作对账 —— 用户看到「3 条过期」，点进去扫描却只提醒了 1 条。
@@ -587,5 +617,5 @@ export function healthOf(entries: SweepEntry[], state: { entries: Record<string,
   }
   let conflicts = 0
   for (const ids of liveByKey.values()) if (ids.length > 1) conflicts += ids.length
-  return { byLayer, tokens, conflicts, pendingReview, reviewDue, expired, total: entries.length }
+  return { byLayer, tokens, conflicts, awaitingReview, reviewDue, expired, total: entries.length }
 }

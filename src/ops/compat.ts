@@ -446,6 +446,8 @@ export function buildCompatOps(deps: CompatOpsDeps): Record<string, (args: any) 
         // 逐会话的让位差额（index.ts 的 CARRIER_DUPLICATES）在别处自有交代。
         const tableState = await deps.toolTableState()
         const table = deps.toolTableReport()
+        // 用户自己关的 = 隐藏 − 出厂默认：表内只有可勾选的那 22 条，跟随总开关的
+        // 自主笔记不在行集里，也就不会混进这两个数。
         const userOff = table.hiddenCount - table.defaultHiddenCount
         const offPart = table.hiddenCount === 0
           ? `${table.totalCount} 个工具全部下发`

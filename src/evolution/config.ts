@@ -199,12 +199,6 @@ export interface EvolutionOverrides {
    * 与「没卡片时仍待确认」的承诺冲突（判定见 `review.ts` 的 `autoActive` 一处）。
    */
   autoConfirm?: boolean
-  /**
-   * 是否注入。`undefined` = 跟随两个开关（任一为真即注入）。
-   * 显式 `false` 是"只学不用"的逃生口；显式 `true` 不能把两个都关掉的层重新打开 ——
-   * 开关本身就是注入的授权，否则「关掉」在界面上就成了假动作。
-   */
-  inject?: boolean
   maxReviewsPerSession?: number
   /**
    * 学习频率的窗口长度（分钟）。全局 / 工作区共用；
@@ -227,8 +221,7 @@ export interface EvolutionOverrides {
 }
 
 /** 全局设置：所有字段都有值。自定义风格的**定义**只存全局，覆盖层只能选不能改。 */
-export interface EvolutionSettings extends Required<Omit<EvolutionOverrides, 'inject'>> {
-  inject?: boolean
+export interface EvolutionSettings extends Required<EvolutionOverrides> {
   customNoteStyles: CustomNoteStyle[]
 }
 
@@ -250,10 +243,13 @@ export const DEFAULT_EVOLUTION_SETTINGS: EvolutionSettings = {
 
 /** 解析后的生效配置，附带「哪一档说了算」。 */
 export interface EffectiveEvolutionConfig extends EvolutionSettings {
-  /** 两项任一为真；工具可见性与后台复习读它。 */
+  /**
+   * 两项任一为真；工具可见性、注入与后台复习都读它。
+   *
+   * 注入没有独立开关：层的开关就是唯一的授权边界，「关掉」必须连注入一起关，
+   * 否则界面上那颗开关会变成假动作。
+   */
   enabled: boolean
-  /** `inject` 已解析：**恒等于 `enabled`**（独立开关已下线，见 `resolveEffectiveConfig`）。 */
-  inject: boolean
   /** 最具体的那一档：界面显示「来源：本工作区设置」。 */
   source: 'global' | 'workspace' | 'session'
   /** 解析时用的身份，注入层要用它过滤层。 */
@@ -293,7 +289,6 @@ const intOf = (v: unknown, fallback: number, min: number, max: number): number =
 export function normalizeEvolutionSettings(raw: any): EvolutionSettings {
   const r = raw && typeof raw === 'object' ? raw : {}
   const d = DEFAULT_EVOLUTION_SETTINGS
-  const inject = typeof r.inject === 'boolean' ? r.inject : undefined
   const legacy = legacyLearnFlags(r)
   const style = normalizeNoteStyle({
     style: r.noteStyle,
@@ -304,7 +299,6 @@ export function normalizeEvolutionSettings(raw: any): EvolutionSettings {
     learnGlobal: typeof r.learnGlobal === 'boolean' ? r.learnGlobal : (legacy?.global ?? d.learnGlobal),
     learnWorkspace: typeof r.learnWorkspace === 'boolean' ? r.learnWorkspace : (legacy?.workspace ?? d.learnWorkspace),
     autoConfirm: typeof r.autoConfirm === 'boolean' ? r.autoConfirm : d.autoConfirm,
-    ...(inject !== undefined ? { inject } : {}),
     maxReviewsPerSession: intOf(r.maxReviewsPerSession, d.maxReviewsPerSession, 0, 20),
     learnWindowMinutes: intOf(r.learnWindowMinutes, d.learnWindowMinutes, NOTE_RATE_MINUTES_MIN, NOTE_RATE_MINUTES_MAX),
     maxLearnsPerWindow: intOf(r.maxLearnsPerWindow, d.maxLearnsPerWindow, NOTE_RATE_NOTES_MIN, NOTE_RATE_NOTES_MAX),
@@ -324,7 +318,6 @@ export function normalizeOverrides(raw: any): EvolutionOverrides {
   if (typeof r.learnWorkspace === 'boolean') out.learnWorkspace = r.learnWorkspace
   else if (legacy !== undefined) out.learnWorkspace = legacy.workspace
   if (typeof r.autoConfirm === 'boolean') out.autoConfirm = r.autoConfirm
-  if (typeof r.inject === 'boolean') out.inject = r.inject
   if (typeof r.maxReviewsPerSession === 'number' && Number.isFinite(r.maxReviewsPerSession)) out.maxReviewsPerSession = intOf(r.maxReviewsPerSession, DEFAULT_EVOLUTION_SETTINGS.maxReviewsPerSession, 0, 20)
   if (typeof r.learnWindowMinutes === 'number' && Number.isFinite(r.learnWindowMinutes)) out.learnWindowMinutes = intOf(r.learnWindowMinutes, NOTE_RATE_DEFAULTS.minutes, NOTE_RATE_MINUTES_MIN, NOTE_RATE_MINUTES_MAX)
   if (typeof r.maxLearnsPerWindow === 'number' && Number.isFinite(r.maxLearnsPerWindow)) out.maxLearnsPerWindow = intOf(r.maxLearnsPerWindow, NOTE_RATE_DEFAULTS.notes, NOTE_RATE_NOTES_MIN, NOTE_RATE_NOTES_MAX)
@@ -346,14 +339,12 @@ export function hasOverrides(o: EvolutionOverrides | undefined): boolean {
 /**
  * 逐字段解析：会话 → 工作区 → 全局，取第一个有定义的。
  *
- * `inject` **恒等于解析后的 `enabled`**：层的开关是唯一的授权边界，注入不再有独立开关。
+ * 注入与学习共用同一道开关：`enabled` 为假就既不学也不注入。曾经有过一颗独立的
+ * 「学但不注入」开关，它让「学但不生效」与「关掉这一层」两套授权边界并存，用户无法
+ * 从界面判断哪一颗才决定上下文内容 —— 已删除，不再保留字段。
  *
- * 曾经有一个「只学不用」的独立开关（`inject=false`），已下线 —— 它的语义与「关掉层的开关」
- * 几乎重叠（关掉层就是既不学也不注入），而留在界面上只会让用户以为可以「学但不生效」，
- * 那是两套授权边界并存。
- *
- * ⚠️ 旧配置里可能还存着 `inject: false`。这里**刻意忽略它**：界面上已经没有那颗开关，
- * 认它等于让那些用户的自主记忆永久不注入，且找不到地方改回来。
+ * ⚠️ 旧配置里可能还存着 `inject`。这里**刻意忽略它**：它已不是受支持的字段，
+ * 认它等于让那些用户的自主记忆永久不注入，而界面上已没有地方能改回来。
  */
 export function resolveEffectiveConfig(
   global: EvolutionSettings,
@@ -371,8 +362,6 @@ export function resolveEffectiveConfig(
   const learnGlobal = pick('learnGlobal') ?? global.learnGlobal
   const learnWorkspace = pick('learnWorkspace') ?? global.learnWorkspace
   const enabled = learnGlobal || learnWorkspace
-  // `inject` 不再读配置：那颗「只学不用」的开关已下线，注入恒跟随层的开关。
-  // 旧文件里的 `inject: false` 被刻意忽略（理由见函数头注释）。
   // 自定义档的定义永远来自全局；覆盖层只能选，不能改。选中的 id 被删掉时退回默认档。
   const customStyles = global.customNoteStyles ?? []
   const pickedStyle = pick('noteStyle')
@@ -384,7 +373,6 @@ export function resolveEffectiveConfig(
     learnWorkspace,
     autoConfirm: pick('autoConfirm') ?? global.autoConfirm,
     enabled,
-    inject: enabled,
     maxReviewsPerSession: pick('maxReviewsPerSession') ?? global.maxReviewsPerSession,
     learnWindowMinutes: pick('learnWindowMinutes') ?? global.learnWindowMinutes,
     maxLearnsPerWindow: pick('maxLearnsPerWindow') ?? global.maxLearnsPerWindow,

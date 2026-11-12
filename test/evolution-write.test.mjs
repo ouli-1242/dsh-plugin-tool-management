@@ -30,7 +30,6 @@ const cfgOf = (over = {}) => ({
   learnGlobal: true,
   learnWorkspace: true,
   enabled: true,
-  inject: true,
   source: 'global',
   ...over,
 })
@@ -411,7 +410,7 @@ test('forget：不存在的 id 返回 not-found，不写空墓碑', async () => 
   } finally { h.done() }
 })
 
-test('preview：direct 反映自动确认的结果', async () => {
+test('preview：预演只跑两次门禁，不再另算一次自动路径', async () => {
   const h = harness()
   try {
     const text = '这个仓库统一用 pnpm'
@@ -421,8 +420,11 @@ test('preview：direct 反映自动确认的结果', async () => {
       cfgOf(), envOf(),
     )
     assert.equal(ok.ok, true, ok.error)
-    assert.equal(ok.direct.status, 'active')
-    assert.equal(ok.direct.autoActive, true)
+    // 预演按「用户已批准」跑第二遍门禁，回包里的 status 就是点下推荐层后的结果；
+    // 以前另跑的第三遍（autoConfirm 路径）已删，`direct` 不能再出现。
+    assert.equal(ok.approved, true)
+    assert.equal(ok.status, 'active')
+    assert.equal('direct' in ok, false)
 
     const globalText = '用户喜欢简洁的回答'
     userSaid(globalText)
@@ -431,8 +433,8 @@ test('preview：direct 反映自动确认的结果', async () => {
       cfgOf(), envOf(),
     )
     assert.equal(global.ok, true, global.error)
-    assert.equal(global.direct.status, 'active')
-    assert.equal(global.direct.autoActive, true)
+    assert.equal(global.status, 'active')
+    assert.equal('direct' in global, false)
   } finally { h.done() }
 })
 

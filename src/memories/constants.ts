@@ -190,7 +190,7 @@ export const ATTACHMENT_LIST_MAX = 10
  * 形式：单行、加粗，放在**板块层收尾**（全部场景块之后、`## Not injected` 尾注之前），整段
  * 只出现一次 —— 挂在每个场景的段头里会在多场景时重复注入。加粗是 markdown 里最省字符的
  * 强调手段。句式是**收束**不是引入：原版以冒号结尾引出清单，挪到条目后面后改句号收尾
- * （与其他五域"说明句后置"同一版式）。
+ * （与其他域"说明句后置"同一版式）。
  *
  * **不点名任何工具**：模型从工具 schema 就知道 `memory_get` 存在，点名反而像在
  * 提示它去调。用户写的内容（记忆正文、场景名与说明）一律原样注入，一个字符都不动。
@@ -209,17 +209,42 @@ export const SCENE_MEMORY_NOTE = '**Memories for the current scene; where they c
 export const SCENE_MEMORY_NOTE_PARTIAL = '**Memories for the current scene; where they conflict with what you observe or with what the user says in this conversation, trust that instead; bring them up only when relevant.**'
 
 /**
- * 合并块（用户记忆 + 自主全局笔记）的收尾语：把上面两句合成一句。
+ * 全局记忆段的收尾语：与场景段同一句式，只把范围换成「这台机器上」。
  *
- * 两块内容进同一条消息后，各带一句授权语会让模型读到两句措辞略有差别、说的却是同一条
- * 规则的话；而且两段之间夹一句"完整集合"会把后一段切成"另一个集合"。合并后只在整块末尾
- * 说一次，`complete` 只在**两块都没截断**时成立 —— 任一块截断就换 PARTIAL，否则尾注里的
- * `## Not injected` / `more learned note(s)` 会直接打脸。
+ * 场景段那句写的是「当前场景对应的记忆」。全局桶（`## Always-on memories`）在任何对话里
+ * 都成立，套上场景的措辞会让模型以为它只在本场景有效 —— 换场景后就不会再提起。
  */
-export const COMBINED_MEMORY_NOTE = '**Memories and learned notes for this conversation; where they conflict with what you observe or with what the user says in this conversation, trust that instead; bring them up only when relevant; this is the complete set.**'
+export const GLOBAL_MEMORY_NOTE = '**Memories for this machine; where they conflict with what you observe or with what the user says in this conversation, trust that instead; bring them up only when relevant; this is the complete set.**'
+
+/** 同一条收尾语，去掉「完整集合」声明 —— 只在真有条目被预算挡下时用。 */
+export const GLOBAL_MEMORY_NOTE_PARTIAL = '**Memories for this machine; where they conflict with what you observe or with what the user says in this conversation, trust that instead; bring them up only when relevant.**'
+
+/**
+ * 工作区记忆段的收尾语：范围写「这个工作区」，并且承认段里还有自主笔记。
+ *
+ * 这一段同时装用户手写的工作区记忆与自主工作区笔记（`renderWorkspaceMemory` + 合并块）。
+ * 沿用场景那句会让模型把本项目专属的约定读成「只在当时那个场景成立」；只提 memories
+ * 又会漏掉后半段的 learned notes。
+ */
+export const WORKSPACE_MEMORY_NOTE = '**Memories and learned notes for this workspace; where they conflict with what you observe or with what the user says in this conversation, trust that instead; bring them up only when relevant; this is the complete set.**'
+
+/** 同一条收尾语，去掉「完整集合」声明 —— 只在真有条目被预算挡下时用。 */
+export const WORKSPACE_MEMORY_NOTE_PARTIAL = '**Memories and learned notes for this workspace; where they conflict with what you observe or with what the user says in this conversation, trust that instead; bring them up only when relevant.**'
+
+/**
+ * 合并块（全局手写记忆 + 自主全局笔记）的收尾语：把上面两句合成一句。
+ *
+ * 范围写「这台机器上」而不是「本次对话」：两块都是全局桶，换个会话仍然成立；
+ * 写成对话范围会让模型以为这些约定只在本轮有效。两块内容进同一条消息后，各带一句
+ * 授权语会让模型读到两句措辞略有差别、说的却是同一条规则的话；而且两段之间夹一句
+ * "完整集合"会把后一段切成"另一个集合"。合并后只在整块末尾说一次，`complete` 只在
+ * **两块都没截断**时成立 —— 任一块截断就换 PARTIAL，否则尾注里的 `## Not injected` /
+ * `more learned note(s)` 会直接打脸。
+ */
+export const COMBINED_MEMORY_NOTE = '**Memories and learned notes for this machine; where they conflict with what you observe or with what the user says in this conversation, trust that instead; bring them up only when relevant; this is the complete set.**'
 
 /** 合并块的收尾语，去掉完整性声明（任一块截断时用）。 */
-export const COMBINED_MEMORY_NOTE_PARTIAL = '**Memories and learned notes for this conversation; where they conflict with what you observe or with what the user says in this conversation, trust that instead; bring them up only when relevant.**'
+export const COMBINED_MEMORY_NOTE_PARTIAL = '**Memories and learned notes for this machine; where they conflict with what you observe or with what the user says in this conversation, trust that instead; bring them up only when relevant.**'
 
 // ── bundle 与索引 ──────────────────────────────────────────────────────────
 

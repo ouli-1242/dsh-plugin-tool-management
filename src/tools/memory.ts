@@ -996,7 +996,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): void {
         return learnReceipt(r, 'none', payload)
       }
 
-      // 先只读预演：同时拿到「弹卡后会发生什么」与「不弹卡直接落盘会发生什么」。
+      // 先只读预演：拿到「弹卡后会发生什么」（层、是否合并 / 取代、会不会直接生效）。
       const preview: any = await previewOp(payload)
       if (!preview || preview.ok === false) throw gateError(preview)
       // 自动确认：不弹卡，模型给的层就是最终层；后台复习也走这条授权。

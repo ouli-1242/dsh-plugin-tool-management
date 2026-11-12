@@ -25,6 +25,18 @@ export const CATALOG_FILE = 'evolution/catalog.json'
 export const CATALOG_VERSION = 1
 
 /**
+ * catalog 里的 `mtime` → ISO 时间串（维护扫描与注入排序共用的唯一换算）。
+ *
+ * 为什么收成一个函数：同一个 `mtime` 曾在两处各写一遍，缺失时一处给空串、一处给
+ * `1970-01-01`。空串在老化判据里是"从没老过"（保守地留着），纪元时间却会被算成
+ * 活了半个世纪 —— 一条读不到时间的记忆会在排序里沉底、又被界面显示成 1970 年。
+ * 缺失一律给空串：读不到时间就承认读不到，别拿纪元冒充。
+ */
+export function isoOfMtime(mtime: number): string {
+  return Number.isFinite(mtime) && mtime > 0 ? new Date(mtime).toISOString() : ''
+}
+
+/**
  * catalog 的绝对落点。
  *
  * 由 `stateDir` 拼出来而不是走 `hubPath()`：服务可以注入自定义 stateDir（测试与多实例），

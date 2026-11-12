@@ -19,7 +19,7 @@ import {
   LAYER_GLOBAL, LAYER_SCENE, LAYER_SESSION, LAYER_WORKSPACE, TRUNCATION_MARKER,
   type MemoryLayer,
 } from './constants.js'
-import { isInjectableStatus, type CatalogEntry } from './catalog.js'
+import { isInjectableStatus, isoOfMtime, type CatalogEntry } from './catalog.js'
 import { itemBlock } from './projection.js'
 import { scoreOf, tierOf, type EntryCounters, type EvolutionState } from '../evolution/state.js'
 
@@ -41,8 +41,8 @@ export interface AutoRenderInput {
   /**
    * 已被更高优先级内容占掉的字节。
    *
-   * 分配顺序（也是丢弃顺序的反向）：手动全局 → 场景记忆 → 全局自主 → 工作区自主。
-   * 所以全局层传"手写记忆段的字节"，工作区层再叠加"全局自主段实际用掉的字节"。
+   * 分配顺序（与 `index.ts` 的扣减一致）：手写记忆（全局 + 场景 + 工作区）→ 全局自主
+   * → 工作区自主。所以全局层传两份手写段的字节，工作区层再叠加全局自主实际用掉的字节。
    */
   reservedBytes: number
   /**
@@ -180,7 +180,7 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
         {
           // 档位从证据算，不从 catalog 读：catalog 是派生数据，多存一份就多一处会漂。
           tier: st ? tierOf(st.evidence) : 'inferred',
-          updatedAt: new Date(entry.mtime || 0).toISOString(),
+          updatedAt: isoOfMtime(entry.mtime),
         },
         countersOf(input.state, entry.id),
       ),
@@ -188,8 +188,9 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
   }
 
   // 一条候选都没有：只发风格行。风格行是「以后怎么写」的写作规范，与「现在有没有条目可注入」
-  // 无关 —— 只学不用（`inject: false`）正好落进这里：条目一条都不进，而学习还在继续，
-  // 吞掉风格行会让用户选的「详细 / 极简 / 自定义」对这批笔记完全失效，而 `memory_note` 的
+  // 无关 —— 层开关关掉时这里进不来（`autoDomainProjection` 已提前返回空），但这一层开着却
+  // 一条候选都没有（刚清空、全部在等裁决）时正好落进来。吞掉风格行会让用户选的
+  // 「详细 / 极简 / 自定义」对这批笔记完全失效，而 `memory_note` 的
   // 工具描述还让模型去 `follow the style line in the learned-notes section`。
   if (candidates.length === 0) {
     if (styleLine === '') return { ...empty, budget, dropped: 0 }

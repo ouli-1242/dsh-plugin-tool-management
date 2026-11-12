@@ -4,8 +4,9 @@
 // 根本用不上。关掉某几个工具，它们整份不进请求（不是"把描述写短点"那种省）；面板
 // （118 个 op）与注入通道完全不受影响。
 //
-// 出厂**默认就关着十八条**（其中自主笔记那一条跟随总开关开合；整张表 23 条，每轮实发 5 条）—— 名单、判据与代价见下面
-// `DEFAULT_HIDDEN_TOOLS`；用户自己额外关的与出厂关的在合计那句里分开报。
+// 出厂**默认就关着十八条**：其中十七条在可勾选的 22 条里（关掉后每轮实发 5 条），
+// 第十八条是自主笔记，它不在行集里、跟随记忆页的总开关（开则实发 6 条）—— 名单、判据
+// 与代价见下面 `DEFAULT_HIDDEN_TOOLS`；用户自己额外关的与出厂关的在合计那句里分开报。
 //
 // 实测数字（口径：宿主 `recordToolSize` 的 `ceil(JSON.stringify(header.tools).length / 4) + 4`，
 // 即**字符数 / 4**；`header.tools` 里只有 name / description / parameters —— 官方的
@@ -102,8 +103,9 @@ export interface ToolTableSettings {
 }
 
 /**
- * 出厂默认关掉的**十八条**：整张表 23 条，关掉后**每轮实发 5 条**。下面五组列 16 条，
- * 人设清单（`subagent_manager_list`）单列在「人设域」那一段，自主笔记单列在末尾 ——
+ * 出厂默认关掉的**十八条**：其中十七条在可勾选的 22 条里（关掉后**每轮实发 5 条**），
+ * 第十八条是自主笔记 —— 它不在行集里、跟随记忆页的总开关（开则实发 6 条）。下面五组列
+ * 16 条，人设清单（`subagent_manager_list`）单列在「人设域」那一段，自主笔记单列在末尾 ——
  * 三条计数不要合并，否则又会对不上。
  *
  * 判据只有一条：**这些信息或动作常态下由注入段与面板承担，
@@ -178,7 +180,10 @@ export const DEFAULT_HIDDEN_TOOLS: readonly string[] = Object.freeze([
   PROACTIVE_MEMORY_TOOL,
 ])
 
-/** 出厂默认那份设置：十八条不发（名单与理由见上面），方案清单是空的。 */
+/**
+ * 出厂默认那份设置：名单十八条（含跟随总开关的自主笔记；落盘 / 读侧都会把它摘掉，
+ * 所以用户看到的可恢复项是十七条），方案清单是空的。
+ */
 export const DEFAULT_TOOL_TABLE_SETTINGS: ToolTableSettings = { hidden: [...DEFAULT_HIDDEN_TOOLS], presets: [] }
 
 /** 方案名上限（与 MCP 备注那类输入同风格：短到能在一行里读，长了也没人看）。 */
@@ -362,19 +367,35 @@ export interface ToolTableGroup {
   hiddenTok: number
 }
 
+/**
+ * 不进可勾选行、只跟总开关走的派生工具（当前只有自主笔记那条）。
+ *
+ * 为什么不在 `toolTableRows` 里：它在界面上没有开关可点（开关在记忆页），混进行集就
+ * 会让"22 条里藏了 18 条"变成"23 条里藏了 18 条"，用户数不出来。但报表仍要交代它 ——
+ * 否则"表内实发 5 条"与模型手里真正拿到的 6 条对不上。
+ */
+export interface ToolTableDerivedTool {
+  name: string
+  /** 总开关开着、且这条确实注册了 ⇒ 会随请求发出。 */
+  active: boolean
+  /** 这条的 ≈token 体积（没注册时为 0）。 */
+  tok: number
+}
+
 /** 工具表报告：分组、关停名单与「关掉会失去什么」的提示。 */
 export interface ToolTableReport {
   groups: ToolTableGroup[]
-  /** 当前会随请求发出的部分。 */
+  /** 当前会随请求发出的部分（**只算表内可勾选的工具**）。 */
   visibleTok: number
   /** 当前不发的那部分（关对了就是这个数）。**不含**载体让位那一档。 */
   hiddenTok: number
   totalTok: number
   visibleCount: number
   hiddenCount: number
+  /** 表内可勾选的工具总数（**不含**派生工具）。 */
   totalCount: number
   /**
-   * 当前关掉的里面有几条是**出厂就关**的（用户没动过它们）。
+   * 当前关掉的里面有几条是**出厂就关**、且用户**可以自己改**的。
    *
    * 给「功能总览」用：`hiddenCount - defaultHiddenCount` 才是"用户自己关掉的条数"。
    * 把出厂默认报成异常，等于把插件自己的选择读成用户的故障 —— 与兼容页那条
@@ -394,6 +415,19 @@ export interface ToolTableReport {
    */
   carrierHiddenCount: number
   carrierHiddenTok: number
+  /**
+   * 表外那条派生工具的口径；调用方没给时为 `undefined`（旧装配 / 单测只关心表内）。
+   *
+   * 界面据此画"22 条手动 + 1 条跟随总开关"，不需要自己再去问总开关。
+   */
+  derived?: ToolTableDerivedTool
+  /**
+   * 实际发送条数 = 表内可见 + 派生工具里 `active` 的那几条。
+   *
+   * 为什么不复用 `visibleCount`：那个数是"用户勾出来的可见集"，而派生工具不受勾选影响；
+   * 两个数混在一起，界面就无法同时说清"表内 5 条"和"实际 6 条"。
+   */
+  sentCount: number
 }
 
 /**
@@ -457,6 +491,10 @@ export function applyToolTableToggles(
 /**
  * 纯函数：把注册时量到的体积按域分组，标出哪些被关掉，给出四档合计。
  *
+ * `rows` 是**可勾选的那部分表**（22 条）：只跟总开关走的那条不在里面 —— 它在界面上没有
+ * 行、不进名单、不进方案。它由 `derived` 参数单独交代（名字、开没开、体积），报告用
+ * `sentCount` 把它加回"实际发送"，两个口径因此不会在接口层散掉。
+ *
  * 顺序：域按 `INJECT_DOMAIN_KEYS`（界面与注入通道同一顺序），域内按**注册顺序**
  * —— 改顺序等于改显示顺序，不额外定义"重要性"，免得出现第二份排序真相。
  *
@@ -469,6 +507,7 @@ export function buildToolTableReport(
   rows: readonly ToolTableRow[],
   hidden: readonly string[],
   carrierHidden: readonly string[] = [],
+  derived?: { name: string; active: boolean; bytes: number },
 ): ToolTableReport {
   const off = new Set(hidden.map((name) => String(name)))
   const carried = new Set(carrierHidden.map((name) => String(name)))
@@ -485,7 +524,12 @@ export function buildToolTableReport(
     const key = name === CONTROL_TOOL_NAME ? 'control' : (domainOfTool(name) ?? 'other')
     let list = buckets.get(key)
     if (list === undefined) { list = []; buckets.set(key, list) }
-    list.push({ name, tok: estimateTok(row.bytes), hidden: off.has(name), defaultHidden: DEFAULT_HIDDEN_SET.has(name) })
+    list.push({
+      name,
+      tok: estimateTok(row.bytes),
+      hidden: off.has(name),
+      defaultHidden: DEFAULT_HIDDEN_SET.has(name),
+    })
   }
   const groups: ToolTableGroup[] = []
   let visibleTok = 0
@@ -515,9 +559,18 @@ export function buildToolTableReport(
     hiddenTok += offTok
     groups.push({ key, tools, tok, hiddenTok: offTok })
   }
+  const derivedTool: ToolTableDerivedTool | undefined = derived === undefined
+    ? undefined
+    : {
+        name: String(derived.name),
+        active: derived.active === true,
+        tok: estimateTok(derived.bytes),
+      }
   return {
     groups, visibleTok, hiddenTok, totalTok: visibleTok + hiddenTok + carrierHiddenTok,
     visibleCount, hiddenCount: totalCount - visibleCount - carrierHiddenCount, totalCount,
     defaultHiddenCount, defaultHiddenTok, carrierHiddenCount, carrierHiddenTok,
+    ...(derivedTool === undefined ? {} : { derived: derivedTool }),
+    sentCount: visibleCount + (derivedTool !== undefined && derivedTool.active ? 1 : 0),
   }
 }

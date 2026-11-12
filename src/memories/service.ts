@@ -342,11 +342,12 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     const watched = memoriesWatch !== null && memoriesWatch.attached()
     if (!watched) return probeSceneFilesSync(memoriesRoot, index, false, override)
     const key = memoriesRoot + '\u0000' + signatureOfIndex(index) + '\u0000' + scopeKeyOf(override as MemoryScopeOverride | undefined)
-    const hit = probeCache.get(key)
+    // 命中要回移：否则淘汰的是最早写入的那条，而不是最久没用的那条（活跃会话会被挤掉）。
+    const hit = cacheGet(probeCache, key)
     if (hit !== undefined && Date.now() - hit.at < PROBE_CACHE_TTL_MS) return hit.value
     const value = probeSceneFilesSync(memoriesRoot, index, false, override)
     probeCache.set(key, { at: Date.now(), value })
-    // 上限：键里带会话覆盖，会话多时会有很多条；100 条 LRU 足够（同一时刻活跃的会话远少于此）。
+    // 上限 100 条：键里带会话覆盖，会话多时会有很多条；同一时刻活跃的会话远少于此。
     while (probeCache.size > 100) {
       const oldest = probeCache.keys().next()
       if (oldest.done === true) break
@@ -355,7 +356,13 @@ export function createMemoriesService(ctx: any, deps: MemoriesDeps): MemoriesSer
     return value
   }
 
-  /** 记忆段：注入侧口径（索引不可信或目录读不动 → 抛）。 */
+  /**
+   * 记忆段：注入侧口径（索引不可信或目录读不动 → 抛）。
+   *
+   * 这里用的是记忆域**整份**预算：`renderSceneMemory` 一次渲染全局桶 + 场景桶，两者
+   * 共用 `rulesMaxBytes` 那一个总盘。工作区桶是另一份渲染，它的预算在调用侧扣掉全局段
+   * 之后才给（`workspaceMemory`），所以不能在这里提前分掉。
+   */
   function requireSceneMemory(scope?: MemoryScopeOverride): SceneMemoryProjection {
     const index = readIndexSync(stateDir)
     assertIndexReadable() // 抛在这里 ⇒ 下面必然处于「索引可信」状态，无需再传 forceDisabled

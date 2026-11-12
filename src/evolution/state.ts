@@ -174,6 +174,12 @@ export interface EntryState {
    * 上下文里消失了 —— 界面还显示"生效"、预算还把它算进去。提醒不该等于停用。
    */
   reviewDue?: string
+  /**
+   * 用户最后一次点「复核」的时间（ISO）。**不写进笔记文件**：复核不改正文，
+   * 所以文件里的 `auto_updated` 必须保持"正文最后一次被改写"的原义。
+   * 维护扫描拿它与 `auto_updated` 里较晚的一个当老化时钟。
+   */
+  reviewedAt?: string
   /** 只有 procedure 有：结构化步骤 + 成功/失败计数。 */
   procedure?: ProcedureState
 }
@@ -323,6 +329,12 @@ function normalizeEntry(raw: any): EntryState | null {
   }
 }
 
+/**
+ * 原型链上的名字不能当条目 id：`entries['__proto__'] = e` 改的是原型，不是落一个
+ * 自有属性 —— 写进 state 的条目会凭空消失，读侧还可能在别的对象上看见它。
+ */
+const UNSAFE_ENTRY_IDS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype'])
+
 /** 宽松读：结构不对的**单个条目**丢掉，整体结构不对才报坏。理由见文件头。 */
 export function normalizeState(raw: any): { ok: true; state: EvolutionState } | { ok: false; error: string } {
   if (raw === null || raw === undefined) return { ok: true, state: emptyState() }
@@ -336,6 +348,7 @@ export function normalizeState(raw: any): { ok: true; state: EvolutionState } | 
   const entries: Record<string, EntryState> = {}
   if (r.entries && typeof r.entries === 'object') {
     for (const [id, value] of Object.entries<any>(r.entries)) {
+      if (UNSAFE_ENTRY_IDS.has(id)) continue
       const e = normalizeEntry(value)
       if (e) entries[id] = e
     }
@@ -502,10 +515,11 @@ export interface EvolutionStateStore {
   /**
    * 读（1 秒缓存）。只给**读侧**用（界面轮询、诊断）—— 写路径一律用 `readFresh`，
    * 否则跨进程会拿着最多 1 秒前的旧快照整份写回，覆盖另一个进程刚写的证据与墓碑。
+   * 不写盘：坏文件的副本与隔离标记由**写路径**去留，读侧只报错。
    */
   read(): Promise<{ ok: true; state: EvolutionState } | { ok: false; error: string }>
-  /** 读（**无缓存**）。所有写路径都必须从这里起手。 */
-  readFresh(): Promise<{ ok: true; state: EvolutionState } | { ok: false; error: string }>
+  /** 读（**无缓存**）。所有写路径都必须从这里起手。默认在解析失败时留存副本并落隔离标记。 */
+  readFresh(opts?: { quarantine?: boolean }): Promise<{ ok: true; state: EvolutionState } | { ok: false; error: string }>
   /** 读（同步快照用）：已缓存则给缓存，否则给空 state 并后台刷新。 */
   cachedSync(): EvolutionState
   /**
@@ -596,8 +610,18 @@ export function createEvolutionState(deps: EvolutionStateDeps): EvolutionStateSt
       + `原因：${q.reason || '未知'}。原文件留存在 ${q.keptFile} —— 处理完它并删除 ${STATE_QUARANTINE_FILE} 后重启即可恢复写入。`
   }
 
-  async function readFresh(): Promise<{ ok: true; state: EvolutionState } | { ok: false; error: string }> {
-    await deps.ensurePaths()
+  /**
+   * 读当前状态。
+   *
+   * @param opts.quarantine 解析失败时是否留存副本并落隔离标记，默认 `true`。**写路径不许关**：
+   *   不留存就等于拿一份空状态去覆盖证据链与墓碑。只有只读 op（`evolution-status` /
+   *   `evolution-health` / `evolution-preview`）给 `false` —— 它们声称不写盘，就不能因为
+   *   撞上一份坏文件而在 `evolution/` 里留下副本。
+   */
+  async function readFresh(opts: { quarantine?: boolean } = {}): Promise<{ ok: true; state: EvolutionState } | { ok: false; error: string }> {
+    const quarantine = opts.quarantine !== false
+    // 只读访问不建目录：目录本身就是一次写盘。
+    if (quarantine) await deps.ensurePaths()
     // 隔离标记是**权威闸门**：它存在时连读都不必给成功结果，否则调用方会拿着空状态
     // 去改、再走 write()，而 write() 的 fail-closed 只是最后一道。
     const q = await readQuarantine()
@@ -613,15 +637,22 @@ export function createEvolutionState(deps: EvolutionStateDeps): EvolutionStateSt
       }
     }
     if (read.status === 'corrupt') {
+      if (!quarantine) return { ok: false, error: corruptReadOnlyError(read.error) }
       const kept = await keepCorruptCopy(read.error)
       return { ok: false, error: kept }
     }
     const normalized = normalizeState(read.value)
     if (!normalized.ok) {
+      if (!quarantine) return { ok: false, error: corruptReadOnlyError(normalized.error) }
       const kept = await keepCorruptCopy(normalized.error)
       return { ok: false, error: kept }
     }
     return normalized
+  }
+
+  /** 只读访问撞上坏文件：如实报错，并说清"副本要等写路径来留"。 */
+  function corruptReadOnlyError(reason: string): string {
+    return `state.json 解析失败：${reason}。本次是只读访问，未改动任何文件；下一次写入前的读取会留存副本并停止自动写入。`
   }
 
   /**
@@ -650,7 +681,7 @@ export function createEvolutionState(deps: EvolutionStateDeps): EvolutionStateSt
 
   async function read(): Promise<{ ok: true; state: EvolutionState } | { ok: false; error: string }> {
     if (cache && Date.now() - cache.at < CACHE_TTL_MS) return { ok: true, state: cache.value }
-    const r = await readFresh()
+    const r = await readFresh({ quarantine: false })
     if (r.ok) cache = { at: Date.now(), value: r.state }
     return r
   }

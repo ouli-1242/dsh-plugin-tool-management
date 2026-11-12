@@ -45,14 +45,13 @@ test('两层开关：只开一层时 enabled 仍为真，另一层保持关', ()
   assert.equal(onlyGlobal.learnWorkspace, false)
 })
 
-test('inject 恒等于 enabled：层开关是唯一授权边界', () => {
-  assert.equal(resolveEffectiveConfig(G).inject, false)
-  assert.equal(resolveEffectiveConfig({ ...G, learnGlobal: true }).inject, true)
-  // 独立的「只学不用」开关已下线：配置里残留的 `inject: false` 被刻意忽略，
-  // 否则界面上没有入口能把它改回来，那些用户的自主记忆会永久不注入。
-  assert.equal(resolveEffectiveConfig({ ...G, learnGlobal: true, inject: false }).inject, true)
-  // 反过来，显式 true 也不能越过层开关。
-  assert.equal(resolveEffectiveConfig({ ...G, learnGlobal: false, learnWorkspace: false, inject: true }).inject, false)
+test('inject 已下线：残留配置不进生效配置，也改不了层开关', () => {
+  const cfg = resolveEffectiveConfig({ ...G, learnGlobal: true, inject: false })
+  // 字段本身不存在，界面与注入判定都只看层开关。
+  assert.equal('inject' in cfg, false)
+  assert.equal(cfg.enabled, true)
+  // 反过来，旧配置里的显式 true 也不能把两个关掉的层打开。
+  assert.equal(resolveEffectiveConfig({ ...G, learnGlobal: false, learnWorkspace: false, inject: true }).enabled, false)
 })
 
 test('source 报最具体的那一档（界面显示「来源」）', () => {

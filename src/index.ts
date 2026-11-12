@@ -74,12 +74,13 @@ import { buildScopeQuestion, scopeChoiceOf, scopeFailureOf, type ScopeAskRequest
 // 写入管线：九道门 + 六步落盘。
 import { createLearner } from './evolution/write.js'
 import type { IncrementalSnapshot } from './context-inject-contract.js'
-import { COMBINED_MEMORY_NOTE, COMBINED_MEMORY_NOTE_PARTIAL, GLOBAL_SCENE, isReservedGroup, layerOfGroup } from './memories/constants.js'
+import { COMBINED_MEMORY_NOTE, COMBINED_MEMORY_NOTE_PARTIAL, GLOBAL_MEMORY_NOTE, GLOBAL_MEMORY_NOTE_PARTIAL, GLOBAL_SCENE, isReservedGroup, layerOfGroup } from './memories/constants.js'
 import { renderAutoLayer, type AutoLayer } from './memories/render-auto.js'
+import { isoOfMtime } from './memories/catalog.js'
 import { appendToSceneGroup } from './memories/projection.js'
 import { workspaceMemoryKeyOf } from './scope/workspace-key.js'
-import { WORKSPACE_GROUP_PREFIX, WORKSPACE_MEMORY_HEADING, SCENE_MEMORY_NOTE, SCENE_MEMORY_NOTE_PARTIAL } from './memories/constants.js'
-import { buildEvolutionOps } from './ops/evolution.js'
+import { WORKSPACE_GROUP_PREFIX, WORKSPACE_MEMORY_HEADING, WORKSPACE_MEMORY_NOTE, WORKSPACE_MEMORY_NOTE_PARTIAL } from './memories/constants.js'
+import { buildEvolutionOps, type InjectBytesReport } from './ops/evolution.js'
 // 改名 / 进场景 / 存档案的联动（op 重包，从本文件 apply 闭包整段抽出）。
 import { installSceneLinkage } from './scene-linkage.js'
 // 访问令牌的宿主侧配置读写（从本文件 apply 闭包整段抽出，依赖显式传参）。
@@ -2505,8 +2506,30 @@ export default {
      */
     const SCOPE_ASK_TIMEOUT_STEPS = [5 * 60 * 1000, 3 * 60 * 1000, 1 * 60 * 1000]
 
+    /**
+     * 会话 id → 连续超时次数（只增到最后一档为止，答一次就删掉）的上限。
+     *
+     * 条目活到进程退出为止，而每开一个会话就会留下一条：不设上限就是慢性泄漏 ——
+     * 宿主长期开着、会话越开越多时，这张表只长不缩。丢掉的只是一句"下次等短点"的
+     * 提示，不是记忆数据，所以溢出时淘汰最早的即可。
+     */
+    const SCOPE_ASK_MISSES_MAX = 64
+
     /** 会话 id → 连续超时次数。只增到最后一档为止，答一次就删掉。 */
     const scopeAskMisses = new Map<string, number>()
+
+    /** 记一次超时；表满时先淘汰最久没被写过的会话（Map 的插入顺序当 LRU 用）。 */
+    function noteScopeAskMiss(sessionId: string): void {
+      if (sessionId === '') return
+      const prev = scopeAskMisses.get(sessionId)
+      // 已有条目先删再写，让它回到插入顺序末尾：淘汰时先丢的是真正常驻的旧会话。
+      if (prev !== undefined) scopeAskMisses.delete(sessionId)
+      else if (scopeAskMisses.size >= SCOPE_ASK_MISSES_MAX) {
+        const oldest = scopeAskMisses.keys().next()
+        if (!oldest.done) scopeAskMisses.delete(oldest.value)
+      }
+      scopeAskMisses.set(sessionId, Math.min((prev ?? 0) + 1, SCOPE_ASK_TIMEOUT_STEPS.length - 1))
+    }
 
     /** 这一轮该等多久：按本会话已连续超时几次取对应档位。 */
     function scopeAskTimeoutFor(sessionId: string): number {
@@ -2565,10 +2588,7 @@ export default {
           // 真取消才向上抛（整轮作废）。
           if (timedOut) {
             // 记一次没答上：下一张卡等得短一些。只增到最后一档，避免计数无限长大。
-            if (askSessionId !== '') {
-              const prev = scopeAskMisses.get(askSessionId) ?? 0
-              scopeAskMisses.set(askSessionId, Math.min(prev + 1, SCOPE_ASK_TIMEOUT_STEPS.length - 1))
-            }
+            noteScopeAskMiss(askSessionId)
             return null
           }
           throw e
@@ -2622,14 +2642,12 @@ export default {
         const cwd = identity?.cwd
         const scopeKey = cwd ? workspaceMemoryKeyOf(cwd) : undefined
         const cfg = evolutionRuntime.effectiveSync(scopeKey, sid)
-        // `inject` 已按两个开关解析过：层都关时它也是 false；显式 false 是「只学不用」的
-        // 逃生口 —— 关掉的是**已有条目**的注入，不是学习本身。
+        // 注入没有独立开关：层的开关一关，这一层已有的条目也不再进上下文，只剩风格行。
         //
         // 所以这里不能整段返回空：风格行是「以后怎么写」的写作规范，而 `memory_note` 的工具
         // 描述明确让模型 `follow the style line in the learned-notes section`。整段清空会让
         // 那句指引指向一个不存在的段落，模型只能退回默认档 —— 用户选了「详细 / 极简 / 自定义」，
         // 期间学的笔记却全按默认写，界面还显示风格已保存。
-        const injectEntries = cfg.inject
         // 两层各有自己的开关：关掉一层 = 不再学这一层，也不再注入这一层已有的条目。
         // 注入器的域开关对这两块仍然生效；这里的层开关是自动记忆自己的门。
         if (layer === 'global' ? !cfg.learnGlobal : !cfg.learnWorkspace) return emptyAutoProjection()
@@ -2693,7 +2711,6 @@ export default {
           // 它们的内容却一个字都没变。条目集合的变化由 entries 差集表达。
           scenes: [...enabledScenes],
           enabled: cfg.enabled,
-          inject: cfg.inject,
           totalBytes: memoriesService.autoAccess.maxBytes,
           reservedBytes: userSegmentBytes + userWorkspaceBytes,
           // 风格变了要重渲染：工作区块的正文里带着风格行，不能等下一次无关的 revision。
@@ -2723,10 +2740,8 @@ export default {
           ? 0
           : Buffer.byteLength(autoDomainProjection('global', agent).body, 'utf8')
         const result = renderAutoLayer(layer, {
-          // 只学不用：条目一条都不进，但风格行照发（它是写作规范，见上面的说明）。
-          // 传空数组而不是提前返回：渲染器据此给出「0 条」而不是「没有这一段」，
-          // 风格行才有地方落。
-          entries: injectEntries ? Object.values(view.catalog.entries) : [],
+          // 条目一条都不进的情况由上面的层开关提前返回处理了；走到这里就是这一层开着。
+          entries: Object.values(view.catalog.entries),
           state: view.state,
           scope: {
             ...(cfg.workspaceHash !== undefined ? { workspaceHash: cfg.workspaceHash } : {}),
@@ -2812,7 +2827,7 @@ export default {
         if (kept.length === 0) return { ...full, text: '', body: '', blocks: [], items: [], scenes: [GLOBAL_SCENE], truncated: false }
         // 正文按 `## Always-on memories` 段落重建：全局桶是唯一剩下的，标题只发一次。
         const body = kept.map(function (b) { return b.block }).join('\n')
-        const text = '## Always-on memories\n\n' + body + '\n\n' + COMBINED_MEMORY_NOTE
+        const text = '## Always-on memories\n\n' + body + '\n\n' + GLOBAL_MEMORY_NOTE
         return { ...full, text, body: '## Always-on memories\n\n' + body, blocks: kept, scenes: [GLOBAL_SCENE], truncated: false }
       })()
       const auto = autoDomainProjection('global', agent)
@@ -2830,7 +2845,12 @@ export default {
       const parts: string[] = []
       if (body !== '') parts.push(body)
       const tail = user.tail.trim()
-      const note = user.truncated || auto.truncated ? COMBINED_MEMORY_NOTE_PARTIAL : COMBINED_MEMORY_NOTE
+      // 只有真的并进了自主笔记才用合并段那句：块里没有笔记时它会把模型引去找
+      // "learned notes"，而这一段一条都没有。
+      const merged = autoBody !== ''
+      const note = user.truncated || auto.truncated
+        ? (merged ? COMBINED_MEMORY_NOTE_PARTIAL : GLOBAL_MEMORY_NOTE_PARTIAL)
+        : (merged ? COMBINED_MEMORY_NOTE : GLOBAL_MEMORY_NOTE)
       // 尾注（`## Not injected`）放在最后当附录：夹在用户记忆与全局笔记之间会把后者
       // 读成"未注入清单"的一部分。风格行跟在尾注之后 —— 它约束的是"以后怎么写"，
       // 不是对当前条目的解释。
@@ -2897,7 +2917,7 @@ export default {
             userEntries.push({ key: 'user:' + block.id, text: block.block, group: WORKSPACE_MEMORY_HEADING })
           }
         } catch {
-          // 读不动：这一轮不给用户那半，但也不谎报"没有记忆"（下面 truncated 会带出来）。
+          // 读不动：这一轮不给用户那半（注入侧同样按空段处理，不把"读不动"报成"用户清空了"）。
           userBody = ''
         }
       }
@@ -2916,7 +2936,7 @@ export default {
           groupTitle: WORKSPACE_MEMORY_HEADING,
         }
       }
-      const note = userTruncated || auto.truncated ? SCENE_MEMORY_NOTE_PARTIAL : SCENE_MEMORY_NOTE
+      const note = userTruncated || auto.truncated ? WORKSPACE_MEMORY_NOTE_PARTIAL : WORKSPACE_MEMORY_NOTE
       // 全局层关掉时风格行由这一层携带（全局块整块不注入，它没地方说）。
       const style = auto.styleLine.trim()
       const text = [...parts, note, ...(style === '' ? [] : [style])].join('\n\n') + '\n'
@@ -2966,7 +2986,7 @@ export default {
           //     （`text(agent)`），两处同源所以不会分叉。
           //   · MCP / 技能 / 提示词：不分深度。
           //
-          // 同一张 `domains` 表管着八个域的开关，没有按会话分流的第二张表 —— 那张
+          // 同一张 `domains` 表管着七个域的开关，没有按会话分流的第二张表 —— 那张
           // `subagentDomains` 已删：人设身份在官方机制里取不到（descriptor 是字段白名单、
           // 冷恢复只还原 provider/model/effort）。
           domains: () => [
@@ -5052,49 +5072,83 @@ export default {
         } catch { /* 反查失败：列表按 hash 短码兜底 */ }
         return out
       },
-      // 页头「注入预算」里自主记忆那部分的真实字节数：走**注入侧同一份渲染**。
+      // 页头「注入预算」里**记忆域**的真实字节数：走注入侧同一份渲染。
       //
       // 界面自己按条目累加会漏掉两道闸（按渲染块实际字节记账、预算装不下就整条让位），得出一个
       // 比实际大的数 —— 用户看到"已超限"转红，而模型那边其实还有余量。
       //
       // 这里合成一个最小 agent（`sessionIdentityOf` 只读 `session.id` 与 `header.cwd`），
-      // 让两层投影按与真实注入完全相同的路径重算一遍。`inject` 关着时两层都返回空。
-      injectBytesOf: async (scopeKey: string | undefined, sessionId: string) => {
-        try {
-          const cwd = scopeKey !== undefined ? workspaceCwdOfScopeKey(scopeKey) : undefined
-          const agent = {
-            session: {
-              ...(sessionId !== '' ? { id: sessionId } : {}),
-              header: {
-                ...(sessionId !== '' ? { id: sessionId } : {}),
-                ...(cwd !== undefined ? { cwd } : {}),
-              },
-            },
-          }
-          // 两层都要算：全局自主并进「常驻记忆」，工作区自主并进「工作区记忆」，两块都占总盘。
-          //
-          // 报的是**整张注入盘的实际占用**，不只是自主段：手写侧那一半（`rules-budget`）
-          // 只算场景记忆段（全局 + 场景），**不含工作区记忆** —— 而工作区记忆同样占这个池子。
-          // 页头拿 `memUsed + 自主段` 相加会漏掉它，于是显示"还剩 100 KiB"而实际早已超限。
-          //
-          // 口径与注入侧逐块对齐（都用整段 `text`，含各自收尾语）：场景段 / 工作区段各取
-          // 一次投影，加两层自主段。任一读不动按 0 算 —— 页头数字不该让整张卡报错。
-          const bytesOf = (s: string): number => {
-            try { return Buffer.byteLength(s, 'utf8') } catch { return 0 }
-          }
-          let total = 0
-          try { total += bytesOf(memoryDomainText(agent)) } catch { /* 读不动按 0 */ }
-          try {
-            const group = workspaceGroupOf(agent)
-            if (group !== '') total += bytesOf(memoriesService.workspaceMemoryText(group, memoryScopeOf(agent)))
-          } catch { /* 读不动按 0 */ }
-          total += bytesOf(autoDomainProjection('global', agent).text)
-          total += bytesOf(autoDomainProjection('workspace', agent).text)
-          return total
-        } catch {
-          // 算不出来就报 0：界面退回本地累加，好过让整张卡因为一个数字报错。
-          return 0
+      // 让三个注入块按与真实注入完全相同的路径重算一遍。口径是**记忆域**：`memoryGlobal`
+      // 与 `memoryWorkspace` 两块，加上跟着场景消息走的场景记忆 —— 三块共用一个 256 KiB
+      // 总盘，漏掉场景那半，页头会在真实已满时显示还有余量。每块只取一次实际正文
+      // （含标题与收尾语），所以不存在"同一个工作区正文既算进用户记忆又算进自主笔记"的重复记账。
+      injectBytesOf: async (scopeKey: string | undefined, sessionId: string): Promise<InjectBytesReport> => {
+        const maxBytes = memoriesService.autoAccess.maxBytes
+        const zero = { global: 0, workspace: 0, scene: 0, autoGlobal: 0, autoWorkspace: 0 }
+        const bytesOf = (s: string): number => {
+          try { return Buffer.byteLength(s, 'utf8') } catch { return 0 }
         }
+        const cwd = scopeKey !== undefined ? workspaceCwdOfScopeKey(scopeKey) : undefined
+        const agent = {
+          session: {
+            ...(sessionId !== '' ? { id: sessionId } : {}),
+            header: {
+              ...(sessionId !== '' ? { id: sessionId } : {}),
+              ...(cwd !== undefined ? { cwd } : {}),
+            },
+          },
+        }
+        // 域开关对记忆域同样生效：关掉的域这一轮一个字都不进上下文，报 0 才是真话。
+        const domains = injectSettingsSync().domains
+        const failures: string[] = []
+        const entryBytes = (entries: IncrementalSnapshot['entries'], prefix: 'user:' | 'auto:'): number => {
+          let n = 0
+          for (const entry of entries) if (entry.key.startsWith(prefix)) n += bytesOf(entry.text)
+          return n
+        }
+        let globalText = ''
+        let workspaceText = ''
+        let sceneBytes = 0
+        let breakdown = zero
+        try {
+          if (domains.memoryGlobal) {
+            const snap = memoryGlobalSnapshot(agent)
+            globalText = snap.text
+            breakdown = { ...breakdown, global: entryBytes(snap.entries, 'user:'), autoGlobal: entryBytes(snap.entries, 'auto:') }
+          }
+        } catch (e) {
+          failures.push(`全局记忆：${message(e)}`)
+        }
+        try {
+          if (domains.memoryWorkspace) {
+            const snap = memoryWorkspaceSnapshot(agent)
+            workspaceText = snap.text
+            breakdown = { ...breakdown, workspace: entryBytes(snap.entries, 'user:'), autoWorkspace: entryBytes(snap.entries, 'auto:') }
+          }
+        } catch (e) {
+          failures.push(`工作区记忆：${message(e)}`)
+        }
+        // 场景记忆与全局 / 工作区共用记忆域总盘，但跟着场景消息注入（`scene` 域）。
+        // 只加非全局条目的正文字节：全局桶已经由 `memoryGlobalSnapshot` 算过，再加一遍
+        // 就是把同一段正文记两次。
+        try {
+          if (domains.scene) {
+            const projection = memoriesService.memoryProjection(memoryScopeOf(agent))
+            const items = projection.items.filter((item) => item.scene !== GLOBAL_SCENE)
+            sceneBytes = items.reduce((sum, item) => sum + item.bytes, 0)
+            breakdown = { ...breakdown, scene: sceneBytes }
+          }
+        } catch (e) {
+          failures.push(`场景记忆：${message(e)}`)
+        }
+        // 目录 / 状态读坏时两个投影都按空数据算：数字算得出来，但它不完整。这种"不抛的降级"
+        // 必须自己声明，否则页头会把"目录没跟上"读成"记忆没了"，用户看到条数与字节一起归零。
+        if (evolutionRuntime.view().broken) failures.push('自主记忆目录或状态文件读坏：本次按空数据估算，字节数不完整')
+        const report: InjectBytesReport = { bytes: bytesOf(globalText) + bytesOf(workspaceText) + sceneBytes, maxBytes, breakdown }
+        // 读不动的那一块不能按 0 悄悄扣掉：带上原因，界面显示"未知 / 不完整"，
+        // 否则用户会把它读成"这块没占字节"。
+        if (failures.length > 0) report.degraded = failures.join('；')
+        return report
       },
       // 同 slot 下同时生效的条目数：与 `healthOf().conflicts` 同一份判据，但只算这一个数。
       // 记忆页要用它显示「有两条矛盾说法同时在上下文里」—— 那个数字此前恒为 0。
@@ -5298,13 +5352,15 @@ export default {
           origin: 'auto' as const,
           tier: st ? tierOf(st.evidence) : 'inferred' as const,
           tokens: e.estTokens,
-          // 用文件 mtime 当 `auto_updated`：每次写正文都会刷新，两者在语义上等价，
-          // 而 mtime 已经随 catalog 读过一次，不必打开 400 个文件。
-          updatedAt: e.mtime > 0 ? new Date(e.mtime).toISOString() : '',
+          // 与记忆列表同一个换算（`isoOfMtime`）：catalog 的 mtime 就是最后一次写正文的时刻，
+          // 缺时间时两处都给空串，不拿 1970 冒充。
+          updatedAt: isoOfMtime(e.mtime),
           kind: e.kind,
           ...(e.workspace !== '' ? { workspace: e.workspace } : {}),
           ...(st?.locked === true ? { locked: true } : {}),
           ...(typeof st?.reviewDue === 'string' && st.reviewDue !== '' ? { reviewDue: st.reviewDue } : {}),
+          // 复核时间与 `updatedAt` 取较晚者当老化时钟：复核没改正文，所以它不在 catalog 里。
+          ...(typeof st?.reviewedAt === 'string' && st.reviewedAt !== '' ? { reviewedAt: st.reviewedAt } : {}),
           counters: {
             injected: counters?.injected ?? 0,
             read: counters?.read ?? 0,
@@ -5427,7 +5483,9 @@ export default {
         readSlashSettings,
         toolTableOp: (args: any) => toolTableOpWithScope(args),
         repairToolTable: () => repairToolTable(),
-        toolTableReport: () => toolTableReport([...withProactiveTool(toolTableHidden())]),
+        // 报表自己按总开关算有效名单（含只跟总开关走的那条），这里不再叠一层，
+        // 免得同一条工具在"隐藏数"里被数两遍。
+        toolTableReport: () => toolTableReport(),
         // 先读一次：预热前 state 是乐观的 'ok'，而这一行要回答的是"文件现在能不能读"。
         toolTableState: async () => { await readToolTableSettings(); return toolTableState() },
         presetRoster: candidates.presetRoster,
@@ -6862,6 +6920,12 @@ export default {
             // 兼容页关掉的工具：可见性半边（restrict）正常时模型根本看不到它，走到这里只有两种
             // 可能 —— 名字是猜的，或者可见性半边没生效（那条降级会上报）。执行侧一律拦住。
             if (toolTableHiddenForSession(scopeKeyForAgent(exec && exec.agent)).has(name)) {
+              // 自主笔记那条不归工具表管：`tool_manager_tools` 主动过滤掉它、自己也被总开关
+              // 锁着两条方向。让模型照下面的提示去 `tool_manager_tools` 开它只会撞墙，
+              // 所以这里必须改指记忆页 —— 那是唯一能改总开关的地方。
+              if (name === PROACTIVE_MEMORY_TOOL) {
+                return 'this tool follows the autonomous memory master switch: turn it on in Settings → Memory (only the user can) — the tool table cannot enable it separately'
+              }
               // 模型自己有出路就别把它推给用户：它手里有控制面工具（tool_manager_tools），
               // 能把这条打开 —— 说清怎么开，比说「去面板点」有用得多。
               return toolAccessRoute(toolDeps, name, exec && exec.agent) === 'none'

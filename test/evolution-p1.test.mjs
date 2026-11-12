@@ -595,7 +595,7 @@ test('墓碑：原文相似也拦 —— 换个 key 或改一个字都不能让�
 })
 
 test('快照键：分层 + 用户动作版本号 + 余量，学习写入不触发重发', () => {
-  const base = { layer: 'global', sessionId: 's-1', workspaceHash: 'w', scenes: ['code'], enabled: true, inject: true }
+  const base = { layer: 'global', sessionId: 's-1', workspaceHash: 'w', scenes: ['code'], enabled: true }
   assert.notEqual(autoSnapshotKey({ ...base, revision: 1 }), autoSnapshotKey({ ...base, revision: 0 }))
   // 旧调用方没传 revision 时与 0 同键：升级本身不该让所有会话重发一次整段。
   assert.equal(autoSnapshotKey(base), autoSnapshotKey({ ...base, revision: 0 }))
@@ -607,7 +607,7 @@ test('快照键：分层 + 用户动作版本号 + 余量，学习写入不触�
 })
 
 test('增量模式键不含 revision / 余量：学习、删除、写记忆都不触发全量，分组变化才触发', () => {
-  const base = { layer: 'global', sessionId: 's-1', workspaceHash: 'w', scenes: ['code'], enabled: true, inject: true }
+  const base = { layer: 'global', sessionId: 's-1', workspaceHash: 'w', scenes: ['code'], enabled: true }
   // 确认 / 学习 / 删除都会 bump revision；它们改变的是条目集合，差集能表达。
   assert.equal(autoIncrementalModeKey(base), autoIncrementalModeKey({ ...base, revision: 99 }))
   // 余量（手写段占掉的字节）**不进模式键**：用户每写一条全局 / 工作区记忆它都会变，
@@ -622,13 +622,15 @@ test('增量模式键不含 revision / 余量：学习、删除、写记忆都�
   assert.notEqual(autoSnapshotKey(base), autoSnapshotKey({ ...base, scenes: ['other'] }))
   // 这些改变的是分组 / 入选集合，差集表达不了，必须回全量。
   assert.notEqual(autoIncrementalModeKey({ ...base, layer: 'workspace' }), autoIncrementalModeKey(base))
-  assert.notEqual(autoIncrementalModeKey({ ...base, inject: false }), autoIncrementalModeKey(base))
+  // 旧配置里残留的 `inject` 已不参与任何判定，也不该被带进模式键：带上它会让老配置
+  // 的用户多一次无意义的整段重发。
+  assert.equal(autoIncrementalModeKey({ ...base, inject: false }), autoIncrementalModeKey(base))
 })
 
 test('压缩后回全量：代数进两个键', () => {
   // 差集注入的前提是「模型上下文里已有上一版整段」。压缩把中间几轮折进摘要，摘要里
   // 没有那份正文 —— 只发差集的话，模型看到「+1 条」却不知道原有的有哪些。
-  const base = { layer: 'global', sessionId: 's-1', workspaceHash: 'w', scenes: ['code'], enabled: true, inject: true }
+  const base = { layer: 'global', sessionId: 's-1', workspaceHash: 'w', scenes: ['code'], enabled: true }
   // 快照键变了 → 这一层会重新渲染整段。
   assert.notEqual(autoSnapshotKey({ ...base, compactionEpoch: 1 }), autoSnapshotKey({ ...base, compactionEpoch: 0 }))
   // 模式键也必须变：只改快照键的话，增量通道仍按旧模式判"没变化"，差集照发。
@@ -845,11 +847,10 @@ test('自动段带上非默认风格行：默认档不注入，body 只放条目
   assert.ok(!detailed.body.includes('When saving a new learned note'), 'body 只放条目')
 })
 
-test('只学不用（条目为空）时仍发风格行：它是写作规范，不是条目注解', () => {
-  // `inject: false` 关掉的是**已有条目**的注入，不是学习本身。而 `memory_note` 的工具描述
-  // 明确让模型 `follow the style line in the learned-notes section` —— 整段清空会让那句
-  // 指引指向一个不存在的段落，模型只能退回默认档：用户选了「详细 / 极简 / 自定义」，
-  // 期间学的笔记却全按默认写，界面还显示风格已保存。
+test('条目为空时仍发风格行：它是写作规范，不是条目注解', () => {
+  // `memory_note` 的工具描述明确让模型 `follow the style line in the learned-notes section`。
+  // 一条条目都没有时整段清空，会让那句指引指向一个不存在的段落，模型只能退回默认档：
+  // 用户选了「详细 / 极简 / 自定义」，期间学的笔记却全按默认写，界面还显示风格已保存。
   const base = { entries: [], state: emptyState(), scope: {}, totalBytes: 262144, reservedBytes: 0 }
   const style = noteStyleLineOf('concise', [])
   const off = renderAutoLayer('global', { ...base, noteStyleLine: style })

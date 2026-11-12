@@ -83,7 +83,8 @@ export interface EvolutionOpDeps {
     byLayer: Record<string, { active: number; candidate: number; archived: number; tokens: number }>
     tokens: number
     conflicts: number
-    pendingReview: number
+    /** 有 `pendingReason`、等用户裁决的条数（不注入）。 */
+    awaitingReview: number
     reviewDue: number
     expired: number
     total: number
@@ -95,16 +96,15 @@ export interface EvolutionOpDeps {
    */
   onSettingsChanged?(): void
   /**
-   * 页头「注入预算」里自主记忆那部分的**真实字节数**。
+   * 页头「注入预算」里**记忆域**的实际字节数。
    *
-   * 必须由装配层提供（它才知道手写记忆占了多少、当前笔记风格、启用场景），
-   * 而且必须走注入侧同一份渲染（`renderAutoLayer`）—— 界面自己按条目累加会漏掉
-   * 「按渲染块实际字节记账」与「预算装不下就整条让位」两道闸，得出一个比实际大的数，
-   * 于是页头报"已超限"而模型那边其实还有余量。
+   * 必须由装配层提供（它才知道手写记忆占了多少、当前笔记风格、启用场景），而且必须走
+   * 注入侧同一份渲染 —— 界面自己按条目累加会漏掉「按渲染块实际字节记账」与「预算装不下
+   * 就整条让位」两道闸，得出一个比实际大的数，于是页头报"已超限"而模型那边其实还有余量。
    *
-   * 可选：单测里不接就报 0（界面退回本地累加）。
+   * 可选：单测里不接就不给这个字段（界面显示未知），不能拿 0 冒充。
    */
-  injectBytesOf?(scopeKey: string | undefined, sessionId: string): Promise<number>
+  injectBytesOf?(scopeKey: string | undefined, sessionId: string): Promise<InjectBytesReport>
   /**
    * 同 slot 下同时生效的条目数（>1 就是两条矛盾说法同时在注入）。
    *
@@ -113,6 +113,24 @@ export interface EvolutionOpDeps {
    */
   conflictsOf?(): Promise<number>
   message(e: unknown): string
+}
+
+/**
+ * 记忆域的注入字节账：`bytes` 是这一轮真正进上下文的字节数。
+ *
+ * `breakdown` 是各来源的**条目正文字节**（不含板块标题与授权语 —— 合并块里它们只发一次），
+ * 用来给界面画构成；各项之和 ≤ `bytes` 是正常现象，不要拿它当总量。
+ */
+export interface InjectBytesReport {
+  bytes: number
+  /** 记忆域上限：手写记忆与自主笔记共用同一个盘。 */
+  maxBytes: number
+  breakdown: { global: number; workspace: number; scene: number; autoGlobal: number; autoWorkspace: number }
+  /**
+   * 有一部分算不出来时的原因（哪一块、为什么）。有它时 `bytes` 可能偏低，
+   * 界面必须显示"未知 / 不完整"，不能当成 0。
+   */
+  degraded?: string
 }
 
 /** 一档的展示形态：值 + 是否真的覆盖了字段（界面据此显示"来源"）。 */
@@ -179,13 +197,13 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
 
         // 自动记忆实况：只报计数，不把正文塞进状态回执（它会被界面高频轮询）。
         const view = runtime.view()
+        // 目录最近一次没更新成功的原因。catalog 是派生数据，失败不影响真相，但**会影响注入**：
+        // 界面必须能区分"记忆被删了"与"目录没跟上"，否则用户只能看到条数凭空空掉。
+        const catalogDegraded = deps.learner?.catalogDegraded()
         const entries = Object.values(view.catalog.entries)
-        // 两个数分开报：`pendingReview` 是「等你裁决」（不注入），`reviewDue` 是「该看一眼」
-        // （照常注入）。合成一个数字，用户会以为生效中的条目也在等他处理。
-        const pendingReview = entries.filter((e) => {
-          const st = view.state.entries[e.id]
-          return st && typeof st.pendingReason === 'string' && st.pendingReason !== ''
-        }).length
+        // 待复核与「已学 / 生效 / 待确认」分开报：`reviewDue` 是「该看一眼」，仍照常注入；
+        // `pending` 是候选数（等用户裁决），不要拿 `pendingReason` 的条数混进去 —— 合成一个
+        // 数字，用户会以为生效中的条目也在等他处理。
         const reviewDue = entries.filter((e) => {
           const st = view.state.entries[e.id]
           return st && typeof st.reviewDue === 'string' && st.reviewDue !== ''
@@ -221,21 +239,22 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             // `byLayer` / `byStatus` 不在这里返回：它们是维护扫描的诊断口径，而 `evolution-health`
             // 已经给了完整一份。放在 status 里从来没有消费者 —— 一个没人读的字段比不存在更糟，
             // 它会让下一个人以为界面上有这张图。
-            pendingReview,
             reviewDue,
             pending,
             archived,
             broken: view.broken,
+            // 有原因才给字段：空串会被界面当成"降级了但没原因"，与"没降级"分不开。
+            ...(catalogDegraded !== undefined ? { catalogDegraded } : {}),
             active: entries.filter((e) => e.enabled && isInjectableStatus(e.status)).length,
-            // 页头「注入预算」用的真实字节数。
+            // 页头「注入预算」里**记忆域**的实际字节数。
             //
             // 界面自己按 `injects` + 层开关 + 当前工作区累加是**算不准**的：注入侧还要过
             // 「按渲染块实际字节记账」与「预算装不下就整条让位」两道闸，实际进上下文的比那个和大。
             // 两个数字对不上时，用户看到的"还剩 30 KiB"与模型看到的上下文会互相矛盾。
             // 这里直接按注入侧同一份口径算一遍，界面只做展示。
             // 没接这个回调（单测 / 老装配）时**不给这个字段**，而不是给 0：
-            // 0 会被界面当成"自主记忆不占字节"，于是页头报的用量偏小、超限也不转红。
-            // 缺字段时界面退回本地累加（会略高估，但不会漏报）。
+            // 0 会被界面当成"记忆不占字节"，于是页头报的用量偏小、超限也不转红。
+            // 缺字段时界面只能显示"未知"，不要拿 0 或本地累加顶上去。
             ...(deps.injectBytesOf === undefined
               ? {}
               : { injectBytes: await deps.injectBytesOf(scopeKey, sessionId) }),
@@ -264,7 +283,6 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         if (typeof patch.learnWorkspace === 'boolean') next.learnWorkspace = patch.learnWorkspace
         else if (typeof patch.enabled === 'boolean') next.learnWorkspace = patch.enabled
         if (typeof patch.autoConfirm === 'boolean') next.autoConfirm = patch.autoConfirm
-        if (typeof patch.inject === 'boolean') next.inject = patch.inject
         if (typeof patch.maxReviewsPerSession === 'number') next.maxReviewsPerSession = patch.maxReviewsPerSession
         // 学习频率：窗口分钟数与每窗口条数；`null` = 回出厂值（空框语义）。
         // 越界值由 `normalizeEvolutionSettings` 统一夹取，这里不写第二份判据。
@@ -514,10 +532,11 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
     },
 
     /**
-     * 复核一条：清掉「待复核」标记并重置计时。
+     * 复核一条：清掉「待复核」标记并重置老化计时。
      *
      * 只清标记不重置时间的话，下一次扫描会立刻按旧时间再挂一次 —— 用户会觉得点了没反应。
-     * 用户改正文（`evolution-update`）同样会重置，所以这里只服务"内容没变、确认仍然对"。
+     * 重置的是 state 里的 `reviewedAt`，**不是文件里的 `auto_updated`**：复核没有改正文，
+     * 写成"刚刚更新"会让列表与 catalog 一起说谎。用户改正文（`evolution-update`）另算。
      */
     'evolution-review': async (args: any) => {
       if (!learner) return { ok: false, error: '自主记忆尚未启用', code: 'unavailable' }
@@ -557,9 +576,17 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             return { ok: false, error: `unknown status "${wanted}" (expected ${KNOWN.join(' / ')})`, code: 'bad-args' }
           }
           status = wanted as typeof status
-        } else {
+        } else if (typeof args?.enabled === 'boolean') {
           // 只给了 `enabled` 的旧调用方：开关语义 = 归档 / 恢复。
-          status = args?.enabled === false ? 'archived' : 'active'
+          status = args.enabled ? 'active' : 'archived'
+        } else {
+          // 两个都没给：**拒绝**，不要兜底成 `active`。一次缺参调用不该把一条归档的
+          // 记忆重新激活 —— 那是"什么都没传，它自己开始注入"的静默副作用。
+          return {
+            ok: false,
+            error: 'missing status — pass status ("active" / "candidate" / "archived") or enabled (true / false)',
+            code: 'bad-args',
+          }
         }
         const result = await learner.setStatus(id, status, 'user')
         if (result && result.ok) runtime.invalidate()

@@ -12,7 +12,7 @@ import { readdirSync, statSync } from 'node:fs'
 import { cp, lstat, mkdir, readFile, readdir, realpath, rename, rm } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { parseSkillDoc, resolveDshHome, unquote } from '../skills/core.js'
-import { MAX_SOURCE_DEPTH, MAX_DIRECTORIES, MAX_ENTRIES, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, TRUNCATION_MARKER, DROPPED_HEADING, SCENE_MEMORY_NOTE, SCENE_MEMORY_NOTE_PARTIAL, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, SHARED_GROUP, WORKSPACE_GROUP_PREFIX, SESSION_GROUP_PREFIX, LEGACY_AUTO_GROUP, WORKSPACE_MEMORY_HEADING, isReservedGroup, byteLen, message, isValidGroupSegment } from './constants.js'
+import { MAX_SOURCE_DEPTH, MAX_DIRECTORIES, MAX_ENTRIES, DEFAULT_ORDER, DEFAULT_GROUP_ORDER, GLOBAL_SCENE, TRUNCATION_MARKER, DROPPED_HEADING, SCENE_MEMORY_NOTE, SCENE_MEMORY_NOTE_PARTIAL, WORKSPACE_MEMORY_NOTE, WORKSPACE_MEMORY_NOTE_PARTIAL, LEGACY_BUNDLE_DOC, bundleDocName, SEGMENT_RULE_HINT, SHARED_GROUP, WORKSPACE_GROUP_PREFIX, SESSION_GROUP_PREFIX, LEGACY_AUTO_GROUP, WORKSPACE_MEMORY_HEADING, isReservedGroup, byteLen, message, isValidGroupSegment } from './constants.js'
 import { ensureSceneRecords, resolveActiveScenes, signatureOfIndex, sceneLabel, sceneHeading, sceneLine, compareSceneBuckets, memoryBlock } from './projection.js'
 import { isIndexQuarantined, readIndex, writeIndex, pathExists, readFileOrThrowSync, isAbsentError } from './index-io.js'
 import type { RuleIndexEntry } from './index-io.js'
@@ -557,7 +557,7 @@ export function renderSceneMemory(
     if (buf !== '') chunks.push(buf)
     // 授权语只出现**一次**，放在板块层（全部场景块之后、`## Not injected` 尾注之前）。
     //
-    // 位置（用户对照其他五域的版式定的）：五个域的说明句现在都收在**正文之后** —— 模型先读
+    // 位置（用户对照其他域的版式定的）：各域的说明句都收在**正文之后** —— 模型先读
     // 条目、紧接着读到"这些条目是什么、怎么用"。此前它在最前（更早还跟每个场景块各来一遍，
     // 2 个场景就是 272 B ≈68 tok/轮），唯一要求是别夹在 `## Scene Memories: X` 与条目之间把分组和
     // 内容隔开 —— 收尾两全：板块级只出现一次，也不隔开任何东西。
@@ -721,7 +721,8 @@ export function renderWorkspaceMemory(
   files.sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))
 
   const marker = `\n${TRUNCATION_MARKER}\n`
-  const noteBytes = byteLen(`${SCENE_MEMORY_NOTE}\n\n`)
+  // 预算按**全量版**收尾语预留：截断态那句更短，分叉不会挤掉任何条目。
+  const noteBytes = byteLen(`${WORKSPACE_MEMORY_NOTE}\n\n`)
   const kept: SceneMemoryFile[] = []
   const missed: SceneMemoryFile[] = []
   let used = noteBytes
@@ -738,7 +739,7 @@ export function renderWorkspaceMemory(
     body += `\n${TRUNCATION_MARKER} ${missed.length} more workspace memory(ies) not shown; list them with memory_get.\n`
   }
   if (body === '') return { ...empty, truncated: probe.truncated || missed.length > 0 }
-  const note = missed.length > 0 || probe.truncated ? SCENE_MEMORY_NOTE_PARTIAL : SCENE_MEMORY_NOTE
+  const note = missed.length > 0 || probe.truncated ? WORKSPACE_MEMORY_NOTE_PARTIAL : WORKSPACE_MEMORY_NOTE
   const text = `${body}\n${note}\n`
   return {
     text,

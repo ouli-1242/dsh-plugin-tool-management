@@ -424,7 +424,9 @@ export const FRAME_CLOSE = '</system-reminder>'
  *     与官方形态分叉会让"这段是不是系统给的"这条判据在两边长得不一样。
  */
 export function escapeFrameBody(body: string): string {
-  return body.replaceAll(FRAME_CLOSE, '<\\/system-reminder>')
+  // 大小写不敏感：XML 里标记名区分大小写，但读到这段文本的是模型，不是 XML 解析器 ——
+  // `</SYSTEM-REMINDER>` 一样会被读成一个收尾标记。转义成本为零，就按"任何大小写都拆掉"。
+  return body.replaceAll(/<\/system-reminder>/gi, '<\\/system-reminder>')
 }
 
 /**

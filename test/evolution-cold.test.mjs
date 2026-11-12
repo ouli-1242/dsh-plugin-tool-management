@@ -38,7 +38,7 @@ const message = (e) => (e instanceof Error ? e.message : String(e))
 const tmp = () => mkdtemp(join(tmpdir(), 'evo-cold-'))
 const MIN = 60_000
 
-const cfgOf = (over = {}) => ({ ...DEFAULT_EVOLUTION_SETTINGS, inject: true, ...over })
+const cfgOf = (over = {}) => ({ ...DEFAULT_EVOLUTION_SETTINGS, ...over })
 
 /** 旧版按轮次排队的 episode 夹具（盘上可能还有，读取路径要兼容）。 */
 const digestOf = (turn, over = {}) => ({

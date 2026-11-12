@@ -193,7 +193,7 @@ export function newestDomainTexts(
     })
     return done()
   }
-  // 提前收工的条件是"八个域都拿到了**内容**"：只有通知的域（`form === 'notice'`）还得继续
+  // 提前收工的条件是"域清单里每一域都拿到了**内容**"：只有通知的域（`form === 'notice'`）还得继续
   // 往更早找它的正文，否则内容恢复时 `body` 是空的，只能当成"内容变了"多发一条。
   const done = (): boolean =>
     out.size === INJECT_DOMAIN_KEYS.length && [...out.values()].every((entry) => entry.form !== 'notice')

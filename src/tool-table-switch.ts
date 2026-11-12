@@ -111,8 +111,9 @@ export interface ToolTableMutationFailure {
 export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitch {
       // ---------- 模型工具表开关（侧车 `tool-table.json`，界面在「兼容」页）----------
   // 工具表按**每个请求**付钱：整张表的定义合计 ≈6.1k tok 每轮都在。关掉某几个，
-  // 它们整份不进请求（实测口径与取舍见 src/tools/table.ts 的文件头）。**出厂就已经关了十八条**
-  // （23 条里实发 5 条）—— 名单、判据与代价在 `DEFAULT_HIDDEN_TOOLS`，只在这个人从没记过
+  // 它们整份不进请求（实测口径与取舍见 src/tools/table.ts 的文件头）。**出厂就已经关了十八条**：
+  // 可勾选的 22 条里藏 17 条（实发 5 条），第十八条是自主笔记、跟随记忆页的总开关（开则实发 6 条）
+  // —— 名单、判据与代价在 `DEFAULT_HIDDEN_TOOLS`，只在这个人从没记过
   // 选择时铺（见下面的 `toolTableSettingsFrom`）。
   //
   // 为什么放在目录之前：两个目录的「用 `X` 查」提示要跟着这份设置变（工具关掉后那句话
@@ -217,7 +218,7 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
   }
   /**
    * 同步快照（热路径用：工具门禁每次调用、注入通道每个 step 都要问一句）。还没加载时先给
-   * **空集**并异步预热 —— 空集不是出厂默认（出厂关着十四条），是刻意的：预热前的这一瞬与
+   * **空集**并异步预热 —— 空集不是出厂默认（出厂在 22 条里关着十七条），是刻意的：预热前的这一瞬与
    * 用户的选择可能不一致，但方向必须是安全的那一侧（不隐藏任何东西，绝不因为读盘慢而让
    * 工具凭空消失）。
    */
@@ -228,12 +229,30 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
     }
     return toolTableCache.off
   }
-  // 自主记忆那条工具不进报表：它不出现在面板里，也不该出现在分组计数 / 体积合计里。
-  const toolTableRows = (): ToolTableRow[] => [...toolTableSizes]
-    .filter(([name]) => name !== PROACTIVE_MEMORY_TOOL)
-    .map(([name, bytes]) => ({ name, bytes }))
-  const toolTableReport = (hidden: readonly string[] = [...toolTableHidden()]): ToolTableReport =>
-    buildToolTableReport(toolTableRows(), hidden, deps.carrierHiddenTools ? deps.carrierHiddenTools() : [])
+  // 行集是可勾选的那 22 条：自主笔记那条**故意不在里面**（它没有手动开关，开关在记忆页）。
+  // 把它塞进来会让界面多画一行改不动的勾选，而"这条在不在表里"与"它发不发"是两件事。
+  // 实际发送由 `withProactiveTool` 在总开关开着时补上，报告用 `derived` / `sentCount` 交代。
+  const toolTableRows = (): ToolTableRow[] =>
+    [...toolTableSizes].filter(([name]) => name !== PROACTIVE_MEMORY_TOOL).map(([name, bytes]) => ({ name, bytes }))
+  /**
+   * 当前生效的关停名单（只含用户手动关的）。
+   *
+   * 报表与真实发送必须同一口径：自主笔记那条不在这份名单里（用户改不了），报告通过
+   * `derived` 单独说它开没开。顺手摘掉旧文件残留的名字 —— 读侧已经摘过一次，这里是第二道。
+   */
+  const effectiveHidden = (hidden: readonly string[] = [...toolTableHidden()]): string[] =>
+    stripProactiveToolHidden(hidden)
+  const toolTableReport = (hidden?: readonly string[]): ToolTableReport =>
+    buildToolTableReport(
+      toolTableRows(),
+      effectiveHidden(hidden),
+      deps.carrierHiddenTools ? deps.carrierHiddenTools() : [],
+      {
+        name: PROACTIVE_MEMORY_TOOL,
+        active: proactiveOn() && toolTableSizes.has(PROACTIVE_MEMORY_TOOL),
+        bytes: toolTableSizes.get(PROACTIVE_MEMORY_TOOL) ?? 0,
+      },
+    )
   /** 落盘 + 同步内存缓存；调用方必须已持有写锁。 */
   async function writeToolTableSettingsLocked(next: ToolTableSettings): Promise<{ ok: true } | { ok: false; error: string }> {
     // 锁内再确认一次：外部编辑器可能在这几毫秒里把文件写坏。此时覆盖同样会毁掉原内容。

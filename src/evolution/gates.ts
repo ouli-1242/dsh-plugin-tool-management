@@ -902,6 +902,10 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
     // 用户选的是「记不记、记在哪层」，不是「覆盖我手写的那条」。
     setReview('user-conflict', `与你自己写的记忆「${userConflict.id}」冲突，等你在记忆页确认`)
   } else {
+    // 合并要求**同类型**：类型决定保质期（事实 / 做法会过期，偏好 / 纠正不会），
+    // 把一条做法并进一条偏好，等于把它的复核计时凭空抹掉。旧数据可能没写 `kind`，
+    // 此时没有可丢的类型信息，按"未知不拦"处理（与 `ExistingEntry.kind` 的约定一致）。
+    const kindCompatible = (e: ExistingEntry): boolean => (typeof e.kind === 'string' && e.kind !== '' ? e.kind === kind : true)
     const autoSame = [...ownKey, ...similar].filter((e) => e.origin === 'auto')
     const seen = new Set<string>()
     for (const e of autoSame) {
@@ -911,12 +915,14 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
       // 批准后层是用户选的：跨层目标不合并，改为取代 —— 否则用户选了工作区，
       // 这条却被并进全局那条，选择等于没生效。
       // 停用的条目也不能当合并目标：并进去仍是停用，新说法等于没记下来。
-      if (sameThing && e.enabled !== false && mergeableStatus(e.status) && (!decided || e.layer === layer)) {
+      if (sameThing && kindCompatible(e) && e.enabled !== false && mergeableStatus(e.status) && (!decided || e.layer === layer)) {
         mergeInto = e.id
       } else if (e.status === 'candidate') {
         // 候选之间同 key 不同说法：直接取代旧的，收件箱里只留最新说法。
         supersedes.push(e.id)
-      } else if (injectableStatus(e.status)) {
+      } else if (injectableStatus(e.status) && e.enabled !== false) {
+        // 已经**停用**（`enabled === false`）的旧说法不替换：它没在注入，不构成"两条矛盾的
+        // 说法同时在上下文里"；用户拨掉它是有意的，换条新说法悄悄写回去等于绕开那个开关。
         if (decided) {
           // 用户批准 / 自动确认的新说法直接取代旧的（同层 / 跨层都算），
           // 不能两条矛盾的事实同时注入。
