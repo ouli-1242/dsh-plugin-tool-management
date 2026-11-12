@@ -1314,6 +1314,10 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-head-stats{display:flex;overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsm-radius-m);background:var(--dsw-alias-bg-layer-2)}
 .dsm-head-stat{display:flex;flex:1;min-width:0;align-items:baseline;gap:4px;padding:6px 12px;border-right:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;white-space:nowrap;overflow:hidden}
 .dsm-head-stat:last-child{border-right:0}
+/* 按内容取宽的一格（记忆页的「记忆域预算」）：其余格等分整行，这格按文字的自然宽度占位。
+   它是这一行里最长的一串（「记忆域预算 262144/262144 B」），等分时先被省略号截掉 ——
+   数字被截比标签被截严重得多。flex:0 0 auto = 不参与等分、不伸缩。 */
+.dsm-head-stat-auto{flex:0 0 auto}
 /* 统计格里的标签（2026-10-12 改成标签在前、值在后）：深灰 12px，可收缩截断；
    值（.dsm-head-num）恒不收缩 —— 宁可截标签也不能截数字。 */
 .dsm-head-stat-label{min-width:0;overflow:hidden;color:var(--dsw-alias-label-secondary);text-overflow:ellipsis;white-space:nowrap}

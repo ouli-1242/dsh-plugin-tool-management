@@ -426,9 +426,8 @@
           h('h2', { className: 'dsm-title' }, props.title),
           desc ? h('span', { className: 'dsm-head-desc', title: desc }, desc) : null),
         (props.actions && props.actions.length) ? h('div', { className: 'dsm-actions' }, props.actions) : null,
-        // 统计格是 `[值, 标签, 附加类名?, 伸缩权重?]` 四元组：第三位可选（记忆页的注入预算
-        // 超限要转错误色，见 .dsm-head-stat.dsm-stat-over）；第四位可选，是这一格在
-        // 「整行宽度」里分到的比例（默认 1，各格等分）。给不给都按原样渲染。
+        // 统计格是 `[值, 标签, 附加类名?]` 三元组：第三位可选（记忆页的注入预算超限要转错误色，
+        // 见 .dsm-head-stat.dsm-stat-over）。不给就是原样的两元组。
         // **标签在前、值在后**（2026-10-12）：指标从"N 个服务"改成"服务 0/7"这种比例口径后，
         // 值在前会被读成"0/7 个服务"（像是分数的量词），标签在前才读得通。
         // 标签可收缩（长标签先截断），值恒不收缩 —— 数字被截比标签被截严重得多。
@@ -437,12 +436,7 @@
         // 元素从 <b> 换成 <span>：不依赖 CSS 覆盖 UA 的加粗默认值，样式只由
         // .dsm-head-num 一处说了算。
         stats.length ? h('div', { className: 'dsm-head-stats' }, stats.map(function (s, i) {
-          return h('div', {
-            key: i,
-            className: 'dsm-head-stat' + (s[2] ? ' ' + s[2] : ''),
-            // flex-basis 是 0，宽度只按 flex-grow 分配 —— 权重写 1.5 就是别人的 1.5 倍。
-            style: typeof s[3] === 'number' ? { flexGrow: String(s[3]) } : undefined,
-          },
+          return h('div', { key: i, className: 'dsm-head-stat' + (s[2] ? ' ' + s[2] : '') },
             h('span', { className: 'dsm-head-stat-label' }, s[1]),
             h('span', { className: 'dsm-head-num' }, s[0]))
         })) : null)

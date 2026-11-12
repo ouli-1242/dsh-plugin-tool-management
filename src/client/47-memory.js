@@ -2450,16 +2450,16 @@
                 // 「4 条记忆」答不了"有几条真在生效"，「3 个场景」也答不了"几个正开着"。
                 // enabled / scenes 两个数服务端 rules-list 一直在给（stats.enabled / stats.scenes），
                 // 之前只用了 total 与 scenes 两个字段，等于把答案丢了。
-                // 权重（第四位）：预算那格的文字最长（「记忆域预算 0/262144 B」），三格等分
-                // 时它先被截断。给它双份宽度，另两格各让出一点（用户 2026-11-12）。
-                [(stats.enabled || 0) + '/' + (stats.total || 0), t('memory.stat.total'), null, 1],
-                [(stats.scenes || 0) + '/' + (data.scenes || []).length, t('memory.stat.sceneCount'), null, 1],
+                [(stats.enabled || 0) + '/' + (stats.total || 0), t('memory.stat.total')],
+                [(stats.scenes || 0) + '/' + (data.scenes || []).length, t('memory.stat.sceneCount')],
                 // 注入预算本来就是"已用/上限"，与上面两格同形；超限整格转错误色。
                 // 已用只取服务端的 `injectBytes.bytes`（记忆域），不叠加任何本地累加 ——
                 // 见上面预算那段注释。取不到时值是「未知 / 降级」，不是 0。
+                // 这格按内容取宽（dsm-head-stat-auto），不与另两格等分：它的文字最长
+                // （「记忆域预算 262144/262144 B」），等分时先被截断（用户 2026-11-12）。
                 [budgetValue,
                   budgetOver ? t('memory.budget.label') + ' · ' + t('memory.budget.over') : t('memory.budget.label'),
-                  budgetOver ? 'dsm-stat-over' : '', 2],
+                  'dsm-head-stat-auto' + (budgetOver ? ' dsm-stat-over' : '')],
                 // 冲突格**只在真有时才出现**：恒显示一个 0 的统计比不显示更糟 —— 用户会
                 // 以为"没有冲突"，而实际上那个字段此前压根没被赋值过。
                 ...(evoConflicts > 0
