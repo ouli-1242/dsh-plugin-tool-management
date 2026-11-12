@@ -832,6 +832,9 @@ export function runGates(input: GateInput, ctx: GateContext): GateOutcome {
    *
    * 与 `approved` 一样能清掉待确认理由，但**不冒充用户看过原文** —— 证据来源不会升成
    * `user_approved`。唯一不能越过的是用户手写记忆冲突：那条永远等用户裁决。
+   *
+   * 它也只免掉「弹卡」，不免层校验：落到全局层仍要有逐字引句，且仍受两个层开关的
+   * `allowed` 约束。用户打开这个开关，就是把「选层」这件事也授权给了 agent。
    */
   const autoActive = input.autoActive === true
   const decided = approved || autoActive

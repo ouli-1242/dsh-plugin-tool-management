@@ -1,20 +1,20 @@
 
-        // ── 设置侧栏「工具管理」那一行的图标（2026-10-18 起，2026-11-04 改走官方插槽）──
+        // ── 设置侧栏「工具管理」那一行的图标 ──
         //
-        // 0.2.2-rc.1 起宿主提供了 `settings.section.icon` 这个 slot：
+        // 宿主提供了 `settings.section.icon` 这个 slot：
         //   dsh-client-ui-settings-general 的 SettingsPanel 渲染每一行时调用
         //     renderSlot('settings.section.icon', { size, active }, { only: row.id, fallback: navIcon(row.id) })
         // 只要注册 id 与 `settings.section` 的 id 相同，就能拿到自己的字形；没注册的 id
         // 仍旧回落到宿主那张封闭名单（account / models / agent-presets / plugins /
         // archived-sessions），其余一律是默认齿轮。
         //
-        // 为什么改掉旧实现：0.2.1 及以前没有这个 slot，本插件用的是「CSS 藏掉宿主 svg、
+        // 为什么改掉旧实现：旧宿主没有这个 slot，本插件用的是「CSS 藏掉宿主 svg、
         // 在 ::before 上画自己的图」的 DOM 接管法（dshmarket / dsh-better-sidebar 的先例）。
-        // 0.2.2 把图标从 `button > svg` 改成了 `button > span.navIcon > svg`，那条
+        // 后来宿主把图标从 `button > svg` 改成了 `button > span.navIcon > svg`，那条
         // `> svg` 选择器随之失配 —— 宿主的齿轮没被藏住，于是同一行并排出现「叠方块 + 齿轮」
-        // 两个图标（2026-11-04 用户截图：工具管理 / 插件市场 / 侧边卡片都是这个症状，
-        // 后两家用的也是同一套接管法）。既然官方把插槽开出来了，MutationObserver 那套
-        // 搬砖就该整段删掉，而不是再补一条更宽的选择器去猜宿主的 DOM。
+        // 两个图标（用户截图里工具管理 / 插件市场 / 侧边卡片都是这个症状，后两家用的也是
+        // 同一套接管法）。既然官方把插槽开出来了，MutationObserver 那套搬砖就该整段删掉，
+        // 而不是再补一条更宽的选择器去猜宿主的 DOM。
         //
         // 图形与 docs/images/icon.svg 同源（三层叠放方块，1024 视图框），但这里内联 path：
         // 客户端 bundle 是单文件，没有加载外部资源的通道。`fill: currentColor` 让它在
