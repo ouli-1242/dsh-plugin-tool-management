@@ -40,7 +40,7 @@ Hard-refresh the browser after installing for web (Cmd/Ctrl+Shift+R), or restart
 <td width="34%" valign="top"><b>Three scopes</b><br>All global / per workspace / per conversation. By default every conversation has its own settings — two conversations in the same project can run two different environments at once.</td>
 </tr>
 <tr>
-<td valign="top"><b>The agent can drive it</b><br>22 model tools across six domains: list, read, create, update, delete, toggle, enter scenes, apply prompts, run personas. Writes ask for confirmation (except in a full-permission session, where the card is skipped and only a log line is written); disabled tools are not in the schema at all.</td>
+<td valign="top"><b>The agent can drive it</b><br>23 model tools across six domains: list, read, create, update, delete, toggle, enter scenes, apply prompts, run personas. Writes ask for confirmation (except in a full-permission session, where the card is skipped and only a log line is written); disabled tools are not in the schema at all.</td>
 <td valign="top"><b>The Host page is a control center</b><br>Version and capability checks, access token, scope mode, per-domain injection switches, the model-tool table and the sidebar entry — all on one page.</td>
 <td valign="top"><b>One panel, eight tabs</b><br>Scenes / MCP / Skills / Subagents / Prompts / Memories / Sessions / Host — no more hunting through six different settings pages.</td>
 </tr>
@@ -88,7 +88,7 @@ Scenes work in all three scopes. Under per-conversation, conversation A can sit 
 <tr><td><b>Skills</b></td><td>Grouped by source; enable, remove, import, edit; same-name skills show which copy is in effect; external directories stay read-only.</td></tr>
 <tr><td><b>Subagents</b></td><td>One <code>.md</code> per persona; delegate work, limit tools, pick a model; only the result comes back, never into your History.</td></tr>
 <tr><td><b>Prompts</b></td><td>Multiple <code>AGENTS.md</code> baselines with one-click apply/undo and five generations of backups; quick prompts paste into the composer from <code>/</code>.</td></tr>
-<tr><td><b>Memories</b></td><td>A scene is the folder; <code>.md</code> bodies are injected automatically; import/export, recycle bin, injection budget (shared 256 KiB with learned notes; over the limit, whole entries step aside and are listed).</td></tr>
+<tr><td><b>Memories</b></td><td>Global / workspace / scene layers; <code>.md</code> bodies are injected automatically; import/export, recycle bin, injection budget (shared 256 KiB with learned notes; over the limit, whole entries step aside and are listed).</td></tr>
 <tr><td><b>Sessions</b></td><td>Archived by project, searchable, batch restore; import Claude Code / Cursor / Codex transcripts; export Markdown / JSONL.</td></tr>
 <tr><td><b>Host</b></td><td>Version and capability checks, access token, scope mode, injection switches, model-tool table, sidebar entry, backup cleanup.</td></tr>
 </table>
@@ -99,24 +99,25 @@ Off by default. When on, the agent records preferences, facts and corrections wo
 
 > **Experimental**: behaviour and UI are still changing. Please [open an issue](https://github.com/ouli-1242/dsh-plugin-tool-management/issues) if something goes wrong.
 
-- **Two independent switches**: global and this workspace can be on together or one at a time; learning and injection both follow them, and the card only lists the layers that are on. On the Memory page global autonomous notes sit inside the Global card, and workspace notes share one “Workspace memory” card with a section per workspace name.
-- **Asked only when needed**: workspace notes backed by the user's own words go active directly; global, procedure, ambiguous, conflicting or unsure-scope notes get a card. The agent does not scan the conversation during normal work — when the host compacts the context, that summary is reviewed once for anything durable.
-- **Card language and rewording**: the card uses the language of the note body; type your own wording in the card and it goes back to the model to rewrite, then asks you again.
-- **Pending only without a card**: with auto-confirm off, background review and headless sessions save as pending, which you can confirm on the Memory page; with auto-confirm on they go active directly.
-- **Two separate injection blocks**: global learned notes and workspace learned notes are injected as their own messages, apart from hand-written memories; adding one note re-sends only its layer.
-- **Shared injection budget with hand-written memories**: 256 KiB for both together, bodies injected in full and never truncated; over the limit, whole entries step aside in the order workspace notes → global notes → scene memories → hand-written global, the ones left out are listed at the end, and the page-header budget turns red.
-- **Disable goes to the recycle bin, and rows are editable**: a disabled note stops being injected and moves to the recycle bin on the Memory page, tagged as autonomous; restore or delete it permanently. The row switch matches memories, and the ⋯ menu edits the body. Deleting keeps the wording from being re-learned for 30 days.
-- **Background review and upkeep**: review runs only when the host compacts the context — no compaction, no review; failures retry with backoff and have a manual retry entry; maintenance runs at most once a day and only changes status, never deletes files.
-- **Separate storage and tool table**: bodies and state live under `evolution/notes/`, apart from hand-written memories; the autonomous-memory tool does not appear in the model tool table and does not follow scenes — only the two switches.
+- **Two independent switches**: global and this workspace can be on together or one at a time; learning and injection both follow them, and the card only lists the layers that are on. On the Memory page global autonomous notes sit inside the Global card, and workspace notes get their own card with a section per workspace.
+- **Every learn asks once**: a new note always gets a card — pick "add to global", "add to this workspace", or "do not add". Only two cases skip it: auto-confirm is on (the agent decides), and merging into a note that is already active (the layer is already settled). The agent does not scan the conversation during normal work — when the host compacts the context, that summary is reviewed once for anything durable.
+- **Card language, rewording, and pending**: the card uses the language of the note body; type your own wording in the card and it goes back to the model to rewrite, then asks you again. Without an interactive card (background review, headless sessions) the note saves as pending and is handled on the Memory page; with auto-confirm on it goes active directly.
+- **Type decides shelf life, and a wrong call is yours to fix**: every note carries a type (preference / fact / correction / procedure). Facts and procedures get a review reminder after 30 days; preferences and corrections never expire. The review card and the editor both state the current type and what it means; if the model got it wrong, change it in the editor and the shelf life is recomputed.
+- **Learn only**: the settings panel can turn off “Inject into conversation”. Notes are still learned and still listed on the Memory page — they just stay out of the conversation context, which is useful when you want to watch what the agent would record.
+- **Two injection messages**: global learned notes join the always-on block, while workspace learned notes and hand-written workspace memories are merged into one “Workspace memories” block; adding one note re-sends only its block.
+- **Evidence comes in three tiers and the model cannot claim one**: a verbatim match of your own words, your confirmation on a card that showed the text, or the agent's own inference — sorting and page labels use those tiers, and `memory_note` has no “I'm confident” parameter to fill in. Something already covered by your own memories is not written a second time.
+- **Shared injection budget with hand-written memories**: 256 KiB for everything together; over the limit, whole entries step aside in the order workspace notes → global notes → workspace memories → scene memories → global memories, the ones left out are listed at the end, and the page-header budget turns red.
+- **Disable, archive and delete are three different things**: the row switch only flips "not injected for now" — the note stays in the list and flips back any time. The ⋯ menu's reject archives it (no longer injected, folded away in the list, restorable at any time, file untouched). Only delete moves it to the recycle bin and writes a tombstone, so the wording cannot be re-learned for 30 days; restore or delete it permanently from there. The ⋯ menu also edits the body.
+- **Background review and upkeep**: review runs only when the host compacts the context — no compaction, no review; failures retry with backoff and have a manual retry entry; maintenance runs at most once a day and only changes status, never deletes files. Bodies and state live under `evolution/notes/`, and the tool never appears in the model tool table or follows scenes — only the two switches.
 
 ## Let the agent drive it
 
-Six domains, **22 model tools**: list, read, create, update, delete, toggle, enter or leave a scene, apply a prompt, run a persona.
+Six domains, **23 model tools**: list, read, create, update, delete, toggle, enter or leave a scene, apply a prompt, run a persona. 22 of them can be toggled individually in the tool table; `memory_note` follows the autonomous-memory switch.
 
 - **Only 5 ship enabled** (`tool_manager_tools` / `memory_get` / `memory_remember` / `skill_manager_read` / `subagent_manager_run`); the other 18 stay off. Off means **not in the schema at all** — the model cannot see them, let alone call them.
 - **Scoped writes**: the model writes to the current layer by default and the receipt says which one; `scope: "global"` is required to touch everything.
 - **Confirmation cards**: stopping servers, deleting, machine-wide toggles and similar writes ask first; recovery actions (restart, restore, undo apply) go straight through.
-- **Per-tool control**: the model-tool table on the Host page adjusts visibility per layer. All 23 on is ~6k tokens/turn; profiles can be saved per task and switched together with a scene.
+- **Per-tool control**: the model-tool table on the Host page adjusts visibility per layer. All 22 on is ~6k tokens/turn; profiles can be saved per task and switched together with a scene.
 - **The model can switch tools back on**: the always-on `tool_manager_tools` lists the tools that are off in this conversation (name, purpose, ≈tokens) and turns them on as needed — when the user asks for a scene whose tools happen to be off, the model has a way forward instead of bouncing back to the user.
 
 ## The Host page
@@ -128,7 +129,7 @@ More than a version number:
 - **Access token**: set / disable / change / delete; writes and plaintext secrets go through it.
 - **Scope**: all global / per workspace / per conversation.
 - **Injection**: per-domain switches, minimal-preset fallback, catalog caps for skills / MCP / subagents (overflow folds into a one-line count; per-entry description length is configurable too), the two slash-menu entries, sidebar entry.
-- **Model tools**: per-tool visibility for all 26, saved per layer.
+- **Model tools**: per-tool visibility for 22 of them (`memory_note` follows the autonomous-memory switch), saved per layer.
 - **Maintenance**: old-backup cleanup, feature overview, recent changes.
 
 <details>

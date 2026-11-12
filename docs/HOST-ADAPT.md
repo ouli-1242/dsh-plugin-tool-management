@@ -133,11 +133,13 @@ agent 不自判、不代替用户验证功能 —— 这两项检测都得由用
 
 ### 3.5 示例
 
+下面的版本号与宿主版本都是**虚构示例**（不是本仓库的发版记录，不要拿去对照 `git log`）。
+
 | 插件版本 | 宿主升级 | 结论 | 该插件版本声明的适配版本 |
 | --- | --- | --- | --- |
-| 0.22.3 | 基准 `0.2.2-rc.1` | — | `0.2.2-rc.1` |
-| 0.22.4 | 升到 `0.2.2-rc.2` | 仍适配 → 追加 | `0.2.2-rc.1`、`0.2.2-rc.2` |
-| 0.22.5 | 升到 `0.2.2-rc.3` | 出现不适配 → 重置 | 仅 `0.2.2-rc.3` |
+| `<基准版>` | 基准 `0.2.2-rc.1` | — | `0.2.2-rc.1` |
+| `<追加版>` | 升到 `0.2.2-rc.2` | 仍适配 → 追加 | `0.2.2-rc.1`、`0.2.2-rc.2` |
+| `<重置版>` | 升到 `0.2.2-rc.3` | 出现不适配 → 重置 | 仅 `0.2.2-rc.3` |
 
 ### 3.6 结论怎么留痕
 
@@ -164,7 +166,39 @@ agent 不自判、不代替用户验证功能 —— 这两项检测都得由用
 
 ---
 
-## 五、更新检查的约束
+## 五、读官方源码（`app.asar` 内的 TypeScript 源）
+
+桌面版把宿主全部代码打进 `resources/app.asar`，**里面有完整的 `.ts` 源码**（不只是编译产物）。
+该文件带 Archive 属性、不能当目录打开，但可以直接按字节读 —— 不要因为"打不开"就退回靠类型猜。
+
+格式：`[8 字节 pickle 头][4 字节 header 大小 N][N 字节 JSON 头][文件数据区]`。
+数据区起点 = `16 + N`；每个文件头里的 `offset` 是相对数据区起点的偏移。
+
+```js
+const fs = require('fs')
+const b = fs.readFileSync('D:/Apps/DeepSeek Harness/resources/app.asar')
+const N = b.readUInt32LE(12)
+const hdr = JSON.parse(b.slice(16, 16 + N).toString('utf8'))
+const base = 16 + N
+function get(p) {
+  let n = hdr
+  for (const seg of p.split('/').filter(Boolean)) { n = n.files[seg]; if (!n) return null }
+  if (n.files) return null
+  return b.slice(base + Number(n.offset), base + Number(n.offset) + n.size).toString('utf8')
+}
+// 例：get('dsh/node_modules/@deepseek-ai/dsh-llm/src/call-config.ts')
+```
+
+注意两点：
+
+- 少数文件（如 `package.json`）的存储内容前面粘着上一份文件的尾巴，读出来要先从第一个 `{` 截起；
+  `.ts` / `.js` 源文件没有这个问题。
+- 读源码是为了**确认真实契约**（字段形状、是否校验未知键、默认值怎么补），不是复制实现。
+  官方依赖仍然只读，不 patch、不 fork。
+
+---
+
+## 六、更新检查的约束
 
 代码在 `src/update-check.ts`，**约束与理由都写在源码头注释里** —— 改这块之前先读那段注释，那里是真相：
 
