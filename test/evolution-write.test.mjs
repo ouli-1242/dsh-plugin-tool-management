@@ -10,9 +10,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { DEFAULT_EVOLUTION_SETTINGS, workspaceHashOf } from '../lib/evolution/config.js'
-import { createEvolutionState } from '../lib/evolution/state.js'
+import { createEvolutionState, tierOf } from '../lib/evolution/state.js'
 import { createLearner, pickField, titleOf } from '../lib/evolution/write.js'
 import { textWidthOf } from '../lib/text-width.js'
 import { captureUserTexts } from '../lib/evolution/evidence.js'
@@ -175,7 +175,7 @@ test('learn：正文 / state / 索引 / catalog 四处一起落，且一律先�
   const h = harness()
   try {
     const r = await h.learner.learn(
-      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'tool_verified' },
+      { text: '这个仓库统一用 pnpm', key: 'package-manager' },
       cfgOf(),
       envOf(),
     )
@@ -196,8 +196,9 @@ test('learn：正文 / state / 索引 / catalog 四处一起落，且一律先�
     const entry = st.entries[r.id]
     assert.ok(entry, 'state 里必须有这条（没有就等于"没有来源的记忆"）')
     assert.equal(entry.evidence.length, 1)
-    assert.equal(entry.evidence[0].source, 'tool_verified')
-    assert.ok(entry.confidence > 0.5)
+    // 没给引句 = 模型自己的推断：证据源是 `model_inference`。档位不落库，由 `tierOf` 从证据算。
+    assert.equal(entry.evidence[0].source, 'model_inference')
+    assert.equal(tierOf(entry.evidence), 'inferred')
 
     // ③ 索引：候选不注入靠的是 status，不靠索引停用 —— 索引保持启用，确认后无需再补一次写
     assert.equal(h.readIndex().rules[r.id].enabled, true)
@@ -215,7 +216,7 @@ test('title：learn 写入 auto_title，catalog 与重建都带上；update 可�
   const h = harness()
   try {
     const r = await h.learner.learn(
-      { title: '  包管理器  ', text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'tool_verified' },
+      { title: '  包管理器  ', text: '这个仓库统一用 pnpm', key: 'package-manager' },
       cfgOf(),
       envOf(),
     )
@@ -242,13 +243,35 @@ test('title：learn 写入 auto_title，catalog 与重建都带上；update 可�
   } finally { h.done() }
 })
 
+test('三条写路径都清掉废弃的 auto_confidence', async () => {
+  // `auto_confidence` 是旧版按「模型自报置信度」排序时留下的字段，现在排序改用证据档位，
+  // 它没有任何读取方。留着不会出错，但会让读代码的人以为置信度还在起作用 ——
+  // 那正是「假功能」的样子。三条写路径（合并 / 状态变更 / 用户编辑）都要清。
+  const h = harness()
+  try {
+    const r = await h.learner.learn(
+      { title: '包管理器', text: '这个仓库统一用 pnpm', key: 'package-manager' },
+      cfgOf(),
+      envOf(),
+    )
+    assert.equal(r.ok, true, r.error)
+    // 造一份带旧字段的文件：真实盘上就有这种条目（候选长期不经过清理路径）。
+    const docPath = join(h.memoriesRoot, r.id + '.md')
+    writeFileSync(docPath, h.readDoc(r.id).replace('auto_status:', 'auto_confidence: "0.40"\nauto_status:'), 'utf8')
+    assert.equal(pickField(h.readDoc(r.id), 'auto_confidence'), '0.40', '前置条件：旧字段在盘上')
+    // 用户编辑这条路径此前漏了清理。
+    assert.equal((await h.learner.update(r.id, '这个仓库统一用 pnpm，不要用 npm')).ok, true)
+    assert.equal(pickField(h.readDoc(r.id), 'auto_confidence'), '', 'update 要清掉废弃字段')
+  } finally { h.done() }
+})
+
 test('autoActive：工作区 + 用户原话直接生效，且证据不冒充用户批准', async () => {
   const h = harness()
   try {
     const text = '这个仓库统一用 pnpm'
     userSaid(text)
     const r = await h.learner.learn(
-      { text, key: 'package-manager', source: 'user_explicit', quote: text, autoActive: true },
+      { text, key: 'package-manager', quote: text, autoActive: true },
       cfgOf(),
       envOf(),
     )
@@ -258,7 +281,7 @@ test('autoActive：工作区 + 用户原话直接生效，且证据不冒充用�
     assert.equal(pickField(h.readDoc(r.id), 'auto_status'), 'active')
     const entry = h.readState().entries[r.id]
     assert.equal(entry.evidence[0].source, 'user_explicit', '没有用户确认，不能写成 user_approved')
-    assert.equal(entry.needsReview, undefined)
+    assert.equal(entry.pendingReason, undefined)
   } finally { h.done() }
 })
 
@@ -268,7 +291,7 @@ test('autoActive：全局 / 做法类 / 模型推断 / 歧义都直接生效', a
     const globalText = '用户喜欢简洁的回答'
     userSaid(globalText)
     const global = await h.learner.learn(
-      { text: globalText, key: 'answer-style', source: 'user_explicit', quote: globalText, layer: 'global', autoActive: true },
+      { text: globalText, key: 'answer-style', quote: globalText, layer: 'global', autoActive: true },
       cfgOf(), envOf(),
     )
     assert.equal(global.status, 'active')
@@ -276,13 +299,13 @@ test('autoActive：全局 / 做法类 / 模型推断 / 歧义都直接生效', a
     const procText = '发布前先跑构建再打 tag'
     userSaid(procText)
     const procedure = await h.learner.learn(
-      { text: procText, key: 'release-steps', source: 'user_explicit', quote: procText, kind: 'procedure', autoActive: true },
+      { text: procText, key: 'release-steps', quote: procText, kind: 'procedure', autoActive: true },
       cfgOf(), envOf(),
     )
     assert.equal(procedure.status, 'active')
 
     const inferred = await h.learner.learn(
-      { text: '这个仓库可能用 pnpm', key: 'pkg-guess', source: 'model_inference', autoActive: true },
+      { text: '这个仓库可能用 pnpm', key: 'pkg-guess', autoActive: true },
       cfgOf(), envOf(),
     )
     assert.equal(inferred.status, 'active')
@@ -290,7 +313,7 @@ test('autoActive：全局 / 做法类 / 模型推断 / 歧义都直接生效', a
     const mixedText = '所有项目都统一用 pnpm'
     userSaid(mixedText)
     const mixed = await h.learner.learn(
-      { text: mixedText, key: 'pnpm-all', source: 'user_explicit', quote: mixedText, layer: 'workspace', autoActive: true },
+      { text: mixedText, key: 'pnpm-all', quote: mixedText, layer: 'workspace', autoActive: true },
       cfgOf(), envOf(),
     )
     assert.equal(mixed.status, 'active')
@@ -298,7 +321,7 @@ test('autoActive：全局 / 做法类 / 模型推断 / 歧义都直接生效', a
     const ambiguousText = '这次先这样，以后都别用 npm'
     userSaid(ambiguousText)
     const ambiguous = await h.learner.learn(
-      { text: ambiguousText, key: 'ambiguous', source: 'user_explicit', quote: ambiguousText, autoActive: true },
+      { text: ambiguousText, key: 'ambiguous', quote: ambiguousText, autoActive: true },
       cfgOf(), envOf(),
     )
     assert.equal(ambiguous.status, 'active', '自动确认由 agent 承担歧义判断')
@@ -311,12 +334,12 @@ test('autoActive：合并进已有候选时一并升 active', async () => {
     const text = '这个仓库统一用 pnpm'
     userSaid(text)
     const first = await h.learner.learn(
-      { text, key: 'package-manager', source: 'user_explicit', quote: text },
+      { text, key: 'package-manager', quote: text },
       cfgOf(), envOf(),
     )
     assert.equal(first.status, 'candidate')
     const merged = await h.learner.learn(
-      { text, key: 'package-manager', source: 'user_explicit', quote: text, autoActive: true },
+      { text, key: 'package-manager', quote: text, autoActive: true },
       cfgOf(), envOf(),
     )
     assert.equal(merged.ok, true, merged.error)
@@ -326,11 +349,39 @@ test('autoActive：合并进已有候选时一并升 active', async () => {
   } finally { h.done() }
 })
 
+test('自动确认路径也要把 kind 与保质期一起落对', async () => {
+  // 自动确认 = 不弹卡，由 agent 自己承担判断。这条路径此前只验证了「状态直接生效」，
+  // 没验证类型与保质期 —— 而它们才是「这条什么时候会消失」的依据。
+  // 事实 / 做法 30 天后提醒复核，偏好 / 纠正不过期；判错方向会让一条会过期的做法永久驻留。
+  const h = harness()
+  try {
+    const cases = [
+      ['procedure', '发布前先跑构建再打 tag', '30'],
+      ['fact', '这个仓库的测试跑在 node 24 上', '30'],
+      ['preference', '回答用中文', '3650'],
+      ['correction', '你刚才又把版本号改错了', '3650'],
+    ]
+    for (const [kind, text, ttl] of cases) {
+      userSaid(text)
+      const r = await h.learner.learn(
+        { text, key: 'k-' + kind, quote: text, kind, autoActive: true },
+        cfgOf(), envOf(),
+      )
+      assert.equal(r.ok, true, r.error)
+      assert.equal(r.status, 'active', kind + '：自动确认后应直接生效')
+      assert.equal(r.kind, kind, kind + '：返回里要带类型')
+      const doc = h.readDoc(r.id)
+      assert.equal(pickField(doc, 'auto_kind'), kind, kind + '：类型要落盘')
+      assert.equal(pickField(doc, 'auto_ttl_days'), ttl, kind + '：保质期要按类型算')
+    }
+  } finally { h.done() }
+})
+
 test('setEnabled：只拨索引，不改状态、不搬文件、不进回收站', async () => {
   const h = harness()
   try {
     const r = await h.learner.learn(
-      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'tool_verified', approved: true },
+      { text: '这个仓库统一用 pnpm', key: 'package-manager', approved: true },
       cfgOf(), envOf(),
     )
     assert.equal(r.ok, true, r.error)
@@ -366,7 +417,7 @@ test('preview：direct 反映自动确认的结果', async () => {
     const text = '这个仓库统一用 pnpm'
     userSaid(text)
     const ok = await h.learner.preview(
-      { text, key: 'package-manager', source: 'user_explicit', quote: text },
+      { text, key: 'package-manager', quote: text },
       cfgOf(), envOf(),
     )
     assert.equal(ok.ok, true, ok.error)
@@ -376,7 +427,7 @@ test('preview：direct 反映自动确认的结果', async () => {
     const globalText = '用户喜欢简洁的回答'
     userSaid(globalText)
     const global = await h.learner.preview(
-      { text: globalText, key: 'answer-style', source: 'user_explicit', quote: globalText, layer: 'global' },
+      { text: globalText, key: 'answer-style', quote: globalText, layer: 'global' },
       cfgOf(), envOf(),
     )
     assert.equal(global.ok, true, global.error)
@@ -389,7 +440,7 @@ test('learn：正文按显示宽度限制（1200 汉字 / 2400 字母）', async
   const h = harness()
   try {
     const longZh = '提交前先跑完整构建与测试，确认所有用例通过后再打标签。'.repeat(50)
-    const r = await h.learner.learn({ text: longZh, source: 'tool_verified' }, cfgOf(), envOf())
+    const r = await h.learner.learn({ text: longZh }, cfgOf(), envOf())
     assert.equal(r.ok, false)
     assert.equal(r.code, 'too-long')
     assert.match(r.error, /limit is 2400/)
@@ -397,19 +448,19 @@ test('learn：正文按显示宽度限制（1200 汉字 / 2400 字母）', async
     // 1200 汉字 = 宽度 2400，是允许值；1201 个汉字才超限。
     const zh1200 = ('提交前先跑完整构建与测试。'.repeat(120)).slice(0, 1200)
     assert.equal(textWidthOf(zh1200), 2400)
-    const okZh = await h.learner.learn({ text: zh1200, source: 'tool_verified' }, cfgOf(), envOf())
+    const okZh = await h.learner.learn({ text: zh1200 }, cfgOf(), envOf())
     assert.notEqual(okZh.code, 'too-long', '1200 汉字应进入门禁，而不是被长度拦下')
 
     // 英文按同一把尺：2400 字母 = 宽度 2400；2401 才超限。
-    const okEn = await h.learner.learn({ text: 'a'.repeat(2400), source: 'tool_verified' }, cfgOf(), envOf())
+    const okEn = await h.learner.learn({ text: 'a'.repeat(2400) }, cfgOf(), envOf())
     assert.notEqual(okEn.code, 'too-long', '2400 字母应进入门禁')
-    const en2401 = await h.learner.learn({ text: 'a'.repeat(2401), source: 'tool_verified' }, cfgOf(), envOf())
+    const en2401 = await h.learner.learn({ text: 'a'.repeat(2401) }, cfgOf(), envOf())
     assert.equal(en2401.code, 'too-long')
 
     // 混排：600 汉字 + 1200 字母 = 宽度 2400。
     const mixed = '汉'.repeat(600) + 'a'.repeat(1200)
     assert.equal(textWidthOf(mixed), 2400)
-    const okMixed = await h.learner.learn({ text: mixed, source: 'tool_verified' }, cfgOf(), envOf())
+    const okMixed = await h.learner.learn({ text: mixed }, cfgOf(), envOf())
     assert.notEqual(okMixed.code, 'too-long')
   } finally { h.done() }
 })
@@ -425,14 +476,14 @@ test('merge：同 key 且说法几乎一样 → 只加证据与边界，不新�
   const h = harness()
   try {
     const first = await h.learner.learn(
-      { text: '所有提交信息都用中文写，不要用英文，因为团队里有人不看英文', key: 'commit-lang', source: 'tool_verified' },
+      { text: '所有提交信息都用中文写，不要用英文，因为团队里有人不看英文', key: 'commit-lang' },
       cfgOf(),
       envOf(),
     )
     assert.equal(first.ok, true, first.error)
 
     const second = await h.learner.learn(
-      { title: '提交语言', text: '所有提交信息都用中文写，不要写英文，因为团队里有人不看英文', key: 'commit-lang', source: 'tool_verified' },
+      { title: '提交语言', text: '所有提交信息都用中文写，不要写英文，因为团队里有人不看英文', key: 'commit-lang' },
       cfgOf(),
       envOf(),
     )
@@ -454,13 +505,13 @@ test('merge：显式 slot 写回文件与 catalog（否则按新 slot 找不到�
   const h = harness()
   try {
     const first = await h.learner.learn(
-      { text: '所有提交信息都用中文写，不要用英文，因为团队里有人不看英文', key: 'commit-lang', source: 'tool_verified' },
+      { text: '所有提交信息都用中文写，不要用英文，因为团队里有人不看英文', key: 'commit-lang' },
       cfgOf(),
       envOf(),
     )
     assert.equal(first.ok, true, first.error)
     const second = await h.learner.learn(
-      { text: '所有提交信息都用中文写，不要写英文，因为团队里有人不看英文', key: 'commit-message-lang', source: 'tool_verified' },
+      { text: '所有提交信息都用中文写，不要写英文，因为团队里有人不看英文', key: 'commit-message-lang' },
       cfgOf(),
       envOf(),
     )
@@ -469,7 +520,7 @@ test('merge：显式 slot 写回文件与 catalog（否则按新 slot 找不到�
     assert.equal(h.readCatalog().entries[first.id].key, 'commit-message-lang', 'catalog 与文件同源')
     // 没有显式 slot 时不能拿派生出来的 slug 覆盖掉稳定句柄。
     const third = await h.learner.learn(
-      { text: '所有提交信息都用中文写，不要写英文，因为团队里有人不看英文', source: 'tool_verified' },
+      { text: '所有提交信息都用中文写，不要写英文，因为团队里有人不看英文' },
       cfgOf(),
       envOf(),
     )
@@ -482,12 +533,12 @@ test('supersede：同 key 但说的不是一回事 → 旧的标 superseded，�
   const h = harness()
   try {
     const first = await h.learner.learn(
-      { text: '这个仓库统一用 pnpm，不要用 npm', key: 'package-manager', source: 'tool_verified' },
+      { text: '这个仓库统一用 pnpm，不要用 npm', key: 'package-manager' },
       cfgOf(),
       envOf(),
     )
     const second = await h.learner.learn(
-      { text: '这个仓库统一用 pnpm，别用 npm', key: 'package-manager', source: 'tool_verified' },
+      { text: '这个仓库统一用 pnpm，别用 npm', key: 'package-manager' },
       cfgOf(),
       envOf(),
     )
@@ -511,13 +562,13 @@ test('approve：候选 → 生效，四处一起改（文件 / state / 索引 / 
   try {
     // 模型推断只能进候选（不注入）—— 这是九道门里最重要的一条保守策略
     const r = await h.learner.learn(
-      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'model_inference' },
+      { text: '这个仓库统一用 pnpm', key: 'package-manager' },
       cfgOf(),
       envOf(),
     )
     assert.equal(r.ok, true, r.error)
     assert.equal(r.status, 'candidate')
-    assert.ok(r.needsReview, '候选必须带上"为什么待确认"')
+    assert.ok(r.pendingReason, '候选必须带上"为什么待确认"')
     assert.equal(pickField(h.readDoc(r.id), 'auto_status'), 'candidate')
     assert.equal(h.readCatalog().entries[r.id].status, 'candidate', '候选不该被注入')
 
@@ -525,7 +576,7 @@ test('approve：候选 → 生效，四处一起改（文件 / state / 索引 / 
     assert.equal(ok.ok, true, ok.error)
     assert.equal(ok.status, 'active')
     assert.equal(pickField(h.readDoc(r.id), 'auto_status'), 'active')
-    assert.equal(h.readState().entries[r.id].needsReview, undefined, '确认过就不该再挂"待确认"')
+    assert.equal(h.readState().entries[r.id].pendingReason, undefined, '确认过就不该再挂"待确认"')
     assert.equal(h.readIndex().rules[r.id].enabled, true)
     assert.equal(h.readCatalog().entries[r.id].status, 'active', 'catalog 不跟着改 = 确认了还是不注入')
 
@@ -533,9 +584,11 @@ test('approve：候选 → 生效，四处一起改（文件 / state / 索引 / 
     // user_approved（0.85）。只升状态不动证据的话，注入门槛（L1 ≥ 0.7）永远放不过
     // 0.4 的推断，症状是"界面显示生效、上下文里永远看不见"。
     const stAfter = h.readState().entries[r.id]
-    assert.equal(stAfter.confidence, 0.85)
+    // 档位取代 confidence 小数：批准过的条目证据升到 `user_approved` → 档位 `confirmed`。
+    assert.equal(stAfter.tier ?? 'confirmed', 'confirmed')
     assert.ok(stAfter.evidence.every((e) => e.source !== 'model_inference'), '推断证据应已全部升级')
-    assert.equal(h.readCatalog().entries[r.id].confidence, 0.85)
+    // catalog 不再存 confidence 副本：档位从 state 的证据算，派生数据里没有它。
+    assert.equal('confidence' in h.readCatalog().entries[r.id], false)
 
     // 已归档 / 已取代的不许"确认复活"（那会绕过墓碑）
     await h.learner.forget(r.id, { actor: 'user' })
@@ -550,13 +603,13 @@ test('approve：只取代同工作区的同 key 旧条目', async () => {
   try {
     const otherHash = 'ffffffffffffffff'
     const a = await h.learner.learn(
-      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'tool_verified', approved: true },
+      { text: '这个仓库统一用 pnpm', key: 'package-manager', approved: true },
       cfgOf(),
       envOf(),
     )
     assert.equal(a.status, 'active')
     const b = await h.learner.learn(
-      { text: '这个仓库统一用 yarn', key: 'package-manager', source: 'model_inference' },
+      { text: '这个仓库统一用 yarn', key: 'package-manager' },
       cfgOf(),
       { ...envOf(), workspaceHash: otherHash },
     )
@@ -569,28 +622,30 @@ test('approve：只取代同工作区的同 key 旧条目', async () => {
   } finally { h.done() }
 })
 
-test('learn 来源只影响信心与待确认理由，不影响「是否生效」：一律候选', async () => {
+test('learn 没有引句一律落候选并说明理由，档位由证据算', async () => {
   const h = harness()
   try {
-    const verified = await h.learner.learn(
-      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'tool_verified' },
+    // 两条都没有 `quote`：来源由系统判定为 `model_inference`，于是都要等用户确认。
+    // 旧的 `tool_verified` 自报档已删除 —— 模型无从声明"我验证过"。
+    const first = await h.learner.learn(
+      { text: '这个仓库统一用 pnpm', key: 'package-manager' },
       cfgOf(),
       envOf(),
     )
-    assert.equal(verified.ok, true, verified.error)
-    assert.equal(verified.status, 'candidate')
-    assert.equal(verified.needsReview, undefined, '工具验证过的推断不需要额外解释，但仍是候选')
-    assert.ok(verified.confidence > 0.5)
+    assert.equal(first.ok, true, first.error)
+    assert.equal(first.status, 'candidate')
+    assert.ok(first.pendingReason, '没有引句 = 推断，必须说明为什么等确认')
+    assert.equal(first.tier, 'inferred')
 
     const inferred = await h.learner.learn(
-      { text: '回答先给结论，再给理由', key: 'answer-style', source: 'model_inference' },
+      { text: '回答先给结论，再给理由', key: 'answer-style' },
       cfgOf(),
       envOf(),
     )
     assert.equal(inferred.ok, true, inferred.error)
     assert.equal(inferred.status, 'candidate')
-    assert.ok(inferred.needsReview, '模型推断要说明为什么等确认')
-    assert.equal(h.readState().entries[inferred.id].confidence, 0.4)
+    assert.ok(inferred.pendingReason, '模型推断要说明为什么等确认')
+    assert.equal(tierOf(h.readState().entries[inferred.id].evidence), 'inferred')
 
     // 没有确认就没有生效路径：收件箱里的条目一条都不该是 active / core / playbook。
     const injectable = Object.values(h.readCatalog().entries)
@@ -603,7 +658,7 @@ test('计数：注入只记进快照的那次，读只记模型 read；缺失条
   const h = harness()
   try {
     const r = await h.learner.learn(
-      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'tool_verified' },
+      { text: '这个仓库统一用 pnpm', key: 'package-manager' },
       cfgOf(),
       envOf(),
     )
@@ -625,7 +680,7 @@ test('用户动作版本号：确认 / 停用 / 删除各 +1，学习写入不 +
   try {
     const revOf = () => h.readState().watermarks.autoRevision ?? 0
     const r = await h.learner.learn(
-      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'tool_verified' },
+      { text: '这个仓库统一用 pnpm', key: 'package-manager' },
       cfgOf(),
       envOf(),
     )
@@ -643,7 +698,7 @@ test('forget：正文交给回收站、条目从 state 消失、索引停用、�
   const h = harness()
   try {
     const r = await h.learner.learn(
-      { text: '提交信息用中文', key: 'commit-lang', source: 'tool_verified' },
+      { text: '提交信息用中文', key: 'commit-lang' },
       cfgOf(),
       envOf(),
     )
@@ -668,11 +723,26 @@ test('forget：正文交给回收站、条目从 state 消失、索引停用、�
   } finally { h.done() }
 })
 
+test('同一个 key 反复删只留一条墓碑', async () => {
+  // 查询侧 `tombstonedBy` 用 `find()` 只认第一条，后面的墓碑永远不会被读到 ——
+  // 留着纯占空间，而 `state.json` 每写一次就要整份序列化一遍。
+  const h = harness()
+  try {
+    // 不能用「学三次删三次」来构造：第二次 learn 就会被墓碑拦住（那是另一条防线，
+    // 见下一个测试）。这里直接对同一条 id 反复 forget，模拟用户在别处重复删。
+    const r = await h.learner.learn({ text: '提交信息用中文', key: 'commit-lang' }, cfgOf(), envOf())
+    assert.equal(r.ok, true, r.error)
+    for (let i = 0; i < 3; i++) await h.learner.forget(r.id, { actor: 'user' })
+    const sameKey = h.readState().tombstones.filter((t) => t.key === 'commit-lang')
+    assert.equal(sameKey.length, 1, '同 key 的墓碑必须只有一条，实际 ' + sameKey.length)
+  } finally { h.done() }
+})
+
 test('墓碑拦截：删过的东西不能被「再说一遍」悄悄复活', async () => {
   const h = harness()
   try {
     const r = await h.learner.learn(
-      { text: '提交信息用中文', key: 'commit-lang', source: 'tool_verified' },
+      { text: '提交信息用中文', key: 'commit-lang' },
       cfgOf(),
       envOf(),
     )
@@ -682,7 +752,7 @@ test('墓碑拦截：删过的东西不能被「再说一遍」悄悄复活', as
     assert.deepEqual(before, [r.id])
 
     const again = await h.learner.learn(
-      { text: '提交信息用中文', key: 'commit-lang', source: 'tool_verified' },
+      { text: '提交信息用中文', key: 'commit-lang' },
       cfgOf(),
       envOf(),
     )
@@ -700,7 +770,7 @@ test('state 读坏就停写：不撤已写的东西，也不覆盖证据与墓�
     writeFileSync(join(h.stateDir, 'evolution', 'state.json'), '{ 这不是 JSON')
 
     const r = await h.learner.learn(
-      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'tool_verified' },
+      { text: '这个仓库统一用 pnpm', key: 'package-manager' },
       cfgOf(),
       envOf(),
     )
@@ -717,7 +787,7 @@ test('会话层：sid 不能当目录名时拒，不静默落到别的层', asyn
   const h = harness()
   try {
     const r = await h.learner.learn(
-      { text: '别动 migrations', source: 'tool_verified', layer: 'session' },
+      { text: '别动 migrations', layer: 'session' },
       cfgOf(),
       { sessionId: '..', workspaceHash: WS_HASH },
     )
@@ -733,7 +803,7 @@ test('setStatus：停用只转状态、不搬文件；恢复后索引与 catalog
   const h = harness()
   try {
     const r = await h.learner.learn(
-      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'tool_verified' },
+      { text: '这个仓库统一用 pnpm', key: 'package-manager' },
       cfgOf(),
       envOf(),
     )
@@ -760,7 +830,7 @@ test('停用写回收站副本；restoreFromTrash 恢复并删副本；purgeTras
   const h = harness()
   try {
     const r = await h.learner.learn(
-      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'tool_verified' },
+      { text: '这个仓库统一用 pnpm', key: 'package-manager' },
       cfgOf(),
       envOf(),
     )
@@ -796,7 +866,7 @@ test('restoreFromTrash：正文被旧版搬走时从副本还原，并补回索�
   const h = harness()
   try {
     const r = await h.learner.learn(
-      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'tool_verified' },
+      { text: '这个仓库统一用 pnpm', key: 'package-manager' },
       cfgOf(),
       envOf(),
     )
@@ -821,7 +891,7 @@ test('purgeTrash：正文不是 archived 时只清孤儿副本，不误删正文
   const h = harness()
   try {
     const r = await h.learner.learn(
-      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'tool_verified' },
+      { text: '这个仓库统一用 pnpm', key: 'package-manager' },
       cfgOf(),
       envOf(),
     )
@@ -843,7 +913,7 @@ test('update：只换正文，catalog 摘要跟着变；frontmatter / 状态不�
   const h = harness()
   try {
     const r = await h.learner.learn(
-      { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'tool_verified' },
+      { text: '这个仓库统一用 pnpm', key: 'package-manager' },
       cfgOf(),
       envOf(),
     )
@@ -885,12 +955,12 @@ test('update：已被取代的条目拒绝编辑（改了也不会注入）', as
   const h = harness()
   try {
     const first = await h.learner.learn(
-      { text: '这个仓库统一用 pnpm，不要用 npm', key: 'package-manager', source: 'tool_verified' },
+      { text: '这个仓库统一用 pnpm，不要用 npm', key: 'package-manager' },
       cfgOf(),
       envOf(),
     )
     await h.learner.learn(
-      { text: '这个仓库改用 npm 了，pnpm 不再可用', key: 'package-manager', source: 'user_explicit' },
+      { text: '这个仓库改用 npm 了，pnpm 不再可用', key: 'package-manager' },
       cfgOf(),
       envOf(),
     )
@@ -904,12 +974,12 @@ test('setStatus：已被取代的条目拒绝恢复（新旧两条同时注入 =
   const h = harness()
   try {
     const first = await h.learner.learn(
-      { text: '这个仓库统一用 pnpm，不要用 npm', key: 'package-manager', source: 'tool_verified' },
+      { text: '这个仓库统一用 pnpm，不要用 npm', key: 'package-manager' },
       cfgOf(),
       envOf(),
     )
     const second = await h.learner.learn(
-      { text: '这个仓库改用 npm 了，pnpm 不再可用', key: 'package-manager', source: 'user_explicit' },
+      { text: '这个仓库改用 npm 了，pnpm 不再可用', key: 'package-manager' },
       cfgOf(),
       envOf(),
     )
@@ -925,7 +995,7 @@ test('promote：正文搬进用户记忆全局场景、auto_* 删干净、原文
   const h = harness()
   try {
     const r = await h.learner.learn(
-      { text: '回答先给结论，再给理由', key: 'answer-style', source: 'tool_verified' },
+      { text: '回答先给结论，再给理由', key: 'answer-style' },
       cfgOf(),
       envOf(),
     )
@@ -940,7 +1010,7 @@ test('promote：正文搬进用户记忆全局场景、auto_* 删干净、原文
     const doc = h.readDoc(promotedId)
     assert.equal(pickField(doc, 'origin'), 'user')
     // 留一个 auto_ 字段就会在下一次全量重建时被重新收进自动段 —— 提升等于没提升。
-    for (const field of ['auto_status', 'auto_key', 'auto_kind', 'auto_confidence', 'auto_basis', 'auto_workspace']) {
+    for (const field of ['auto_status', 'auto_key', 'auto_kind', 'auto_basis', 'auto_workspace']) {
       assert.equal(pickField(doc, field), '', field + ' 必须删掉')
     }
     // 原件移进自主回收站（evolution/trash，可人工找回），不留在原地变成幽灵。
@@ -957,16 +1027,159 @@ test('promote：正文搬进用户记忆全局场景、auto_* 删干净、原文
   } finally { h.done() }
 })
 
+test('合并时 kind 变了要跟着改 TTL，否则第一次学错就永久固化', async () => {
+  // `kind` 决定保质期：`fact` / `procedure` 30 天后提醒复核，`preference` / `correction` 不过期。
+  // 早先合并只改状态与正文相关字段，`auto_kind` / `auto_ttl_days` 停在第一次的值 ——
+  // 一条做法被误判成 correction（3650 天）之后，再合并多少次都改不回来。
+  const h = harness()
+  try {
+    const text = '重开子代理时把已确认的结论写成简报'
+    userSaid(text)
+    const first = await h.learner.learn(
+      { text, key: 'subagent-brief', quote: text, kind: 'correction', autoActive: true },
+      cfgOf(), envOf(),
+    )
+    assert.equal(first.ok, true, first.error)
+    const before = h.readDoc(first.id)
+    assert.equal(pickField(before, 'auto_kind'), 'correction')
+    assert.equal(pickField(before, 'auto_ttl_days'), '3650', 'correction 不过期')
+
+    // 同一个 key 再学一次，这次判对了是 procedure → kind 与 TTL 都要跟着改。
+    const again = await h.learner.learn(
+      { text, key: 'subagent-brief', quote: text, kind: 'procedure', autoActive: true },
+      cfgOf(), envOf(),
+    )
+    assert.equal(again.ok, true, again.error)
+    const after = h.readDoc(first.id)
+    assert.equal(pickField(after, 'auto_kind'), 'procedure', 'kind 要跟着合并走')
+    assert.equal(pickField(after, 'auto_ttl_days'), '30', 'TTL 跟着 kind 重算')
+  } finally { h.done() }
+})
+
+test('learn 的返回带 kind：回执要能告诉模型它最终被记成什么类型', async () => {
+  // 类型决定保质期。模型没传 `kind` 时是 `inferKind` 按措辞猜的 —— 返回里不带这个值，
+  // 工具回执就无从回显，模型也就不知道自己那条被判成了做法还是纠正。
+  const h = harness()
+  try {
+    const text = '提交信息一律用中文'
+    userSaid(text)
+    const explicit = await h.learner.learn(
+      { text, key: 'commit-lang', quote: text, kind: 'preference', autoActive: true },
+      cfgOf(), envOf(),
+    )
+    assert.equal(explicit.ok, true, explicit.error)
+    assert.equal(explicit.kind, 'preference', '显式给的类型要原样返回')
+
+    // 不给类型时返回推断结果，而不是空 —— 空值会让回执少一行，模型看不出被猜成了什么。
+    const inferred = await h.learner.learn(
+      { text: '测试数据放在 tmp 目录', key: 'tmp-dir', autoActive: true },
+      cfgOf(), envOf(),
+    )
+    assert.equal(inferred.ok, true, inferred.error)
+    assert.equal(typeof inferred.kind, 'string', '推断出的类型也要返回')
+    assert.ok(['preference', 'fact', 'correction', 'procedure'].includes(inferred.kind), '必须是四个已知类型之一')
+  } finally { h.done() }
+})
+
+test('编辑时能改 kind：按新类型重算 TTL，catalog 同步', async () => {
+  // 模型判错类型时，这是**唯一**的修正入口 —— 否则一条被误判成 `correction` 的做法
+  // 会永久驻留（那个类型不过期），用户毫无办法。
+  const h = harness()
+  try {
+    const text = '重开子代理时把已确认的结论写成简报'
+    userSaid(text)
+    const first = await h.learner.learn(
+      { text, key: 'subagent-brief', quote: text, kind: 'correction', autoActive: true },
+      cfgOf(), envOf(),
+    )
+    assert.equal(first.ok, true, first.error)
+    assert.equal(pickField(h.readDoc(first.id), 'auto_ttl_days'), '3650')
+
+    // 只改类型：正文传空串，应该保留原正文。
+    const edited = await h.learner.update(first.id, '', '', undefined, 'procedure')
+    assert.equal(edited.ok, true, edited.error)
+    const doc = h.readDoc(first.id)
+    assert.equal(pickField(doc, 'auto_kind'), 'procedure', '类型要改过来')
+    assert.equal(pickField(doc, 'auto_ttl_days'), '30', 'TTL 跟着新类型重算')
+    assert.match(doc, /重开子代理时把已确认的结论写成简报/, '只改类型时正文不能被清空')
+    assert.equal(h.readCatalog().entries[first.id].kind, 'procedure', 'catalog 与文件同源')
+  } finally { h.done() }
+})
+
+test('编辑时 kind 没变就不动 TTL', async () => {
+  const h = harness()
+  try {
+    const text = '发布前先跑构建再打 tag'
+    userSaid(text)
+    const first = await h.learner.learn(
+      { text, key: 'release-steps', quote: text, kind: 'procedure', ttlDays: 90, autoActive: true },
+      cfgOf(), envOf(),
+    )
+    assert.equal(first.ok, true, first.error)
+    const edited = await h.learner.update(first.id, text, '', undefined, 'procedure')
+    assert.equal(edited.ok, true, edited.error)
+    assert.equal(pickField(h.readDoc(first.id), 'auto_ttl_days'), '90', '类型没变，显式 TTL 不该被冲掉')
+  } finally { h.done() }
+})
+
+test('合并改了 kind 时，catalog 与文件必须同源', async () => {
+  // catalog 是注入与列表的唯一数据源，文件是落盘真相。两边 kind 分家会出现：
+  // 列表显示 procedure、注入按 correction 的保质期算，谁也说不清哪份对。
+  const h = harness()
+  try {
+    const text = '重开子代理时把已确认的结论写成简报'
+    userSaid(text)
+    const first = await h.learner.learn(
+      { text, key: 'subagent-brief', quote: text, kind: 'correction', autoActive: true },
+      cfgOf(), envOf(),
+    )
+    assert.equal(first.ok, true, first.error)
+    assert.equal(h.readCatalog().entries[first.id].kind, 'correction')
+
+    const again = await h.learner.learn(
+      { text, key: 'subagent-brief', quote: text, kind: 'procedure', autoActive: true },
+      cfgOf(), envOf(),
+    )
+    assert.equal(again.ok, true, again.error)
+    const docKind = pickField(h.readDoc(first.id), 'auto_kind')
+    const catKind = h.readCatalog().entries[first.id].kind
+    assert.equal(docKind, 'procedure', '文件里的 kind 要更新')
+    assert.equal(catKind, 'procedure', 'catalog 的 kind 要与文件同源')
+    assert.equal(docKind, catKind)
+  } finally { h.done() }
+})
+
+test('合并时 kind 没变就不动 TTL，用户的显式 ttlDays 不被覆盖', async () => {
+  const h = harness()
+  try {
+    const text = '发布前先跑构建再打 tag'
+    userSaid(text)
+    const first = await h.learner.learn(
+      { text, key: 'release-steps', quote: text, kind: 'procedure', ttlDays: 90, autoActive: true },
+      cfgOf(), envOf(),
+    )
+    assert.equal(first.ok, true, first.error)
+    assert.equal(pickField(h.readDoc(first.id), 'auto_ttl_days'), '90')
+
+    const again = await h.learner.learn(
+      { text, key: 'release-steps', quote: text, kind: 'procedure', autoActive: true },
+      cfgOf(), envOf(),
+    )
+    assert.equal(again.ok, true, again.error)
+    assert.equal(pickField(h.readDoc(first.id), 'auto_ttl_days'), '90', 'kind 没变，显式 TTL 不该被冲掉')
+  } finally { h.done() }
+})
+
 test('organize → applyOrganize(merge)：保留项正文不动、被并项转 superseded、证据并过来', async () => {
   const h = harness()
   try {
     const a = await h.learner.learn(
-      { text: '所有提交信息都用中文写，不要用英文，因为团队里有人不看英文', key: 'commit-lang', source: 'tool_verified' },
+      { text: '所有提交信息都用中文写，不要用英文，因为团队里有人不看英文', key: 'commit-lang' },
       cfgOf(),
       envOf(),
     )
     const b = await h.learner.learn(
-      { text: '提交信息别写英文', key: 'commit-message-lang', source: 'tool_verified' },
+      { text: '提交信息别写英文', key: 'commit-message-lang' },
       cfgOf(),
       envOf(),
     )
@@ -999,12 +1212,43 @@ test('organize → applyOrganize(merge)：保留项正文不动、被并项转 s
   } finally { h.done() }
 })
 
+test('applyOrganize(merge) 自己再拦一次跨类型：应用的是客户端手里的旧草案', async () => {
+  // 草案阶段已经拦过一次（`draftOrganize` 要求同 kind）。这里再拦，是因为「应用」回传的
+  // 是客户端手里的旧草案 —— 期间若有一条被改了类型，两道校验之间就有空档。
+  // 合错了不报错，只会让一条做法悄悄变成永不过期。
+  const h = harness()
+  try {
+    const a = await h.learner.learn(
+      { text: '所有提交信息都用中文写，不要用英文，因为团队里有人不看英文', key: 'commit-lang', kind: 'procedure' },
+      cfgOf(), envOf(),
+    )
+    const b = await h.learner.learn(
+      { text: '提交信息别写英文', key: 'commit-message-lang', kind: 'preference' },
+      cfgOf(), envOf(),
+    )
+    assert.equal(a.ok, true, a.error)
+    assert.equal(b.ok, true, b.error)
+    assert.equal(pickField(h.readDoc(a.id), 'auto_kind'), 'procedure')
+    assert.equal(pickField(h.readDoc(b.id), 'auto_kind'), 'preference')
+
+    // 绕过草案直接应用（模拟旧草案 / 手改过的回传）。
+    const res = await h.learner.applyOrganize({ action: 'merge', ids: [a.id, b.id], keep: a.id })
+    assert.equal(res.ok, false, '跨类型合并必须被拒')
+    assert.equal(res.code, 'kind-mismatch')
+    assert.match(res.error, /procedure/)
+    assert.match(res.error, /preference/)
+    // 被拒之后两条都还在，谁也没被 superseded。
+    assert.equal(pickField(h.readDoc(a.id), 'auto_status') !== 'superseded', true)
+    assert.equal(pickField(h.readDoc(b.id), 'auto_status') !== 'superseded', true)
+  } finally { h.done() }
+})
+
 // ── 对话卡片：批准直接生效 ─────────────────────────────────────────────────
 
 test('preview：只读预演不落盘；批准后 model_inference 直接生效并升级证据', async () => {
   const h = harness()
   try {
-    const req = { text: '这个仓库统一用 pnpm', key: 'package-manager', source: 'model_inference' }
+    const req = { text: '这个仓库统一用 pnpm', key: 'package-manager' }
     const p = await h.learner.preview(req, cfgOf(), envOf())
     assert.equal(p.ok, true, p.error)
     assert.equal(p.status, 'active')
@@ -1021,9 +1265,9 @@ test('preview：只读预演不落盘；批准后 model_inference 直接生效�
     assert.equal(r.approved, true)
     assert.equal(pickField(h.readDoc(r.id), 'auto_status'), 'active')
     const st = h.readState()
-    assert.equal(st.entries[r.id].needsReview, undefined)
+    assert.equal(st.entries[r.id].pendingReason, undefined)
     assert.equal(st.entries[r.id].evidence[0].source, 'user_approved')
-    assert.equal(st.entries[r.id].confidence, 0.85)
+    assert.equal(st.entries[r.id].tier ?? 'confirmed', 'confirmed')
     assert.ok((st.watermarks.autoRevision ?? 0) > 0, '卡片批准是用户动作，要 bump 版本号')
   } finally { h.done() }
 })
@@ -1036,7 +1280,7 @@ test('approved + 与用户手写记忆冲突：仍然 candidate，卡片不越�
       '---', 'name: pkg', 'description: 用户写的包管理器约定', 'origin: user', '---', '',
       '这个仓库统一用 pnpm，不要用 npm', '',
     ].join('\n'))
-    const req = { text: '这个仓库统一用 pnpm，不要用 npm。', key: 'package-manager', source: 'model_inference' }
+    const req = { text: '这个仓库统一用 pnpm，不要用 npm。', key: 'package-manager' }
     const p = await h.learner.preview(req, cfgOf(), envOf())
     assert.equal(p.ok, true, p.error)
     assert.equal(p.status, 'candidate')
@@ -1046,7 +1290,7 @@ test('approved + 与用户手写记忆冲突：仍然 candidate，卡片不越�
     assert.equal(r.ok, true, r.error)
     assert.equal(r.status, 'candidate')
     assert.equal(r.reviewCode, 'user-conflict')
-    assert.ok(r.needsReview)
+    assert.ok(r.pendingReason)
     assert.equal(pickField(h.readDoc(r.id), 'auto_status'), 'candidate')
   } finally { h.done() }
 })
@@ -1055,13 +1299,13 @@ test('approved + 同 key 生效旧说法：新说法直接取代旧的', async (
   const h = harness()
   try {
     const first = await h.learner.learn(
-      { text: '这个仓库统一用 pnpm，不要用 npm', key: 'package-manager', source: 'tool_verified', approved: true },
+      { text: '这个仓库统一用 pnpm，不要用 npm', key: 'package-manager', approved: true },
       cfgOf(),
       envOf(),
     )
     assert.equal(first.status, 'active')
     const second = await h.learner.learn(
-      { text: '这个仓库统一用 yarn', key: 'package-manager', source: 'model_inference', approved: true },
+      { text: '这个仓库统一用 yarn', key: 'package-manager', approved: true },
       cfgOf(),
       envOf(),
     )
@@ -1076,13 +1320,13 @@ test('approved + 跨层相似条目：按用户选的层新建，并取代另一
   const h = harness()
   try {
     const globalFirst = await h.learner.learn(
-      { text: '所有项目统一用 pnpm 管理依赖', key: 'pkg-global', source: 'tool_verified', layer: 'global', approved: true },
+      { text: '所有项目统一用 pnpm 管理依赖', key: 'pkg-global', layer: 'global', approved: true },
       cfgOf(),
       envOf(),
     )
     assert.equal(globalFirst.layer, 'global')
     const workspace = await h.learner.learn(
-      { text: '所有项目统一用 pnpm 管理依赖', key: 'pkg-global', source: 'model_inference', layer: 'workspace', approved: true },
+      { text: '所有项目统一用 pnpm 管理依赖', key: 'pkg-global', layer: 'workspace', approved: true },
       cfgOf(),
       envOf(),
     )
@@ -1097,13 +1341,13 @@ test('archived 相似条目不再被当成合并目标（新条目不生效的�
   const h = harness()
   try {
     const old = await h.learner.learn(
-      { text: '发布前先跑完整测试', key: 'release-test', source: 'tool_verified', approved: true },
+      { text: '发布前先跑完整测试', key: 'release-test', approved: true },
       cfgOf(),
       envOf(),
     )
     await h.learner.setStatus(old.id, 'archived', 'user')
     const r = await h.learner.learn(
-      { text: '发布前先跑完整测试', key: 'release-test', source: 'model_inference', approved: true },
+      { text: '发布前先跑完整测试', key: 'release-test', approved: true },
       cfgOf(),
       envOf(),
     )
@@ -1111,5 +1355,34 @@ test('archived 相似条目不再被当成合并目标（新条目不生效的�
     assert.notEqual(r.id, old.id, '归档条目不能吞掉新学到的同一条')
     assert.equal(r.status, 'active')
     assert.equal(pickField(h.readDoc(old.id), 'auto_status'), 'archived')
+  } finally { h.done() }
+})
+
+test('state.json 损坏：留存副本、写下隔离标记、此后的写入一律拒绝', async () => {
+  // 这条链最危险的失败不是「读坏」，而是**读坏之后继续写**：文件被搬走后下一次读得到
+  // `missing`，那是全新用户的正常状态 —— 于是任意一次写（编辑一条笔记、每日维护扫描）
+  // 都会把空状态整份写回，entries 与 tombstones 一起清零。墓碑丢了，用户删过的内容会被
+  // 自动路径重新学回来；证据链丢了，已确认的记忆失去「凭什么记」。两者都不可重建。
+  const h = harness()
+  try {
+    const stateFile = join(h.stateDir, 'evolution', 'state.json')
+    mkdirSync(join(h.stateDir, 'evolution'), { recursive: true })
+    writeFileSync(stateFile, '{ this is not json')
+    const bad = await h.state.readFresh()
+    assert.equal(bad.ok, false)
+    assert.match(bad.error, /已被隔离/)
+    const q = await h.state.quarantined()
+    assert.ok(q, '必须留下隔离标记')
+    // `keptFile` 唯一的用途是写进给用户看的那句话，必须是**能直接打开的绝对路径**。
+    // 早先这里存的是 hub 相对路径（`corruptBackupPath()` 的返回值），用户拿到一个没法用的路径。
+    assert.equal(isAbsolute(q.keptFile), true, 'keptFile 必须是绝对路径：' + q.keptFile)
+    assert.equal(existsSync(q.keptFile), true, '留存副本必须真的落盘：' + q.keptFile)
+    assert.match(bad.error, new RegExp(q.keptFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), '报错文案里要带上那个路径')
+    // 原文件一个字节都不动：它是用户唯一的证据链。
+    assert.equal(readFileSync(stateFile, 'utf8'), '{ this is not json')
+    // 隔离期间任何写入都必须被拒 —— 包括绕过 readFresh 直接调 write 的那种。
+    const w = await h.state.write({ version: 1, entries: {}, tombstones: [], watermarks: {} })
+    assert.equal(w.ok, false, '隔离期间不许落盘')
+    assert.equal(readFileSync(stateFile, 'utf8'), '{ this is not json')
   } finally { h.done() }
 })

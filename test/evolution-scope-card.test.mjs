@@ -53,6 +53,22 @@ test('卡片：推荐层排第一，跳过永远最后；detail 带上要保存�
   assert.deepEqual(one.options.map((o) => o.label), ['Global memory', 'Don\'t save'])
 })
 
+test('学习卡片写明类型与保质期：用户看不到类型就不知道会不会被催复核', () => {
+  // `kind` 决定保质期（`ttlDaysOf`：事实 / 做法 30 天后提醒复核，偏好 / 纠正不过期）。
+  // 这张卡片是用户决定「要不要这条」的主要界面，不写类型等于让他盲签。
+  const base = { text: '改完源码必须跑完整 build', allowed: ['global', 'workspace'] }
+  const zh = buildScopeQuestion({ ...base, kind: 'procedure' })
+  assert.match(zh.detail, /类型：做法（30 天后提醒复核）/)
+  const zhPref = buildScopeQuestion({ ...base, kind: 'preference' })
+  assert.match(zhPref.detail, /类型：偏好（不会过期）/)
+  // 英文卡片用半角括号：全角括号与拉丁字母混排很怪。
+  const en = buildScopeQuestion({ text: 'always run the full build', allowed: ['workspace'], kind: 'fact' })
+  assert.match(en.detail, /Type: fact \(review reminder after 30 days\)/)
+  // 没给类型时不编一个：旧调用方 / 推断不出时不该凭空写类型。
+  const none = buildScopeQuestion(base)
+  assert.doesNotMatch(none.detail, /类型/)
+})
+
 test('答案映射：按 label 回层；认不出就返回 null（调用方退回待确认，不猜）', () => {
   const zh = buildScopeQuestion({ text: '中文', recommended: 'global', allowed: ['global', 'workspace'] })
   const [zg, zw, zs] = zh.options.map((o) => o.label)

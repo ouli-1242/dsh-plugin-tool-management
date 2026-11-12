@@ -66,8 +66,15 @@ const REPLY_OK = JSON.stringify({
  */
 function fakeLlm(reply = REPLY_OK) {
   const calls = []
+  // 逐字段复刻官方 `callConfigEquals`（`dsh-llm` 的 `call-config.js`）：它比的是**六个**字段，
+  // 少比一个就等于给那个字段留了一条测试永远发现不了的分叉 —— 真实环境会抛
+  // `INVALID_PREPARED_CALL`，而这里仍然绿。`stop` 按元素逐个比，缺省与空数组不等。
   const sameConfig = (a, b) => a.provider === b.provider && a.model === b.model
+    && a.reasoningEffort === b.reasoningEffort
     && a.temperature === b.temperature && a.maxTokens === b.maxTokens
+    && (a.stop === undefined || b.stop === undefined
+      ? a.stop === b.stop
+      : a.stop.length === b.stop.length && a.stop.every((s, i) => s === b.stop[i]))
   return {
     calls,
     prepareCall(cfg) {
@@ -251,10 +258,81 @@ test('episodes：compact 清掉老 done，保留 pending 与新的 done', async 
 
   const r = await store.compact(30)
   assert.equal(r.dropped, 1)
+  assert.equal(r.kept, 2)
   assert.deepEqual((await store.list()).map((x) => x.id), ['s1:2', 's1:3'])
+  // 清理走**追加墓碑行**，不整份重写：outbox 是 append-only 日志，冷路径随时可能在追加，
+  // 读全量再写回会丢掉那段窗口里的新行。所以文件变长、视图变短。
   const text = await readFile(join(dir, 'evolution/outbox.jsonl'), 'utf8')
-  assert.equal(text.trim().split('\n').length, 2)
-  for (const line of text.trim().split('\n')) JSON.parse(line)
+  const lines = text.trim().split('\n')
+  assert.equal(lines.length, 4, '3 行历史 + 1 行 dropped 墓碑')
+  for (const line of lines) JSON.parse(line)
+  assert.ok(lines.some((l) => JSON.parse(l).status === 'dropped'), '要留下可追查的墓碑')
+})
+
+test('episodes：墓碑积到一半以上时压实，文件不无界增长', async () => {
+  const dir = await tmp()
+  const store = createEpisodeStore({ stateDir: dir, message })
+  const old = new Date(Date.now() - 40 * 86400_000).toISOString()
+  await mkdir(join(dir, 'evolution'), { recursive: true })
+  // 300 条过期 done + 1 条 pending：墓碑远多于保留行，必须压实。
+  const rows = []
+  for (let i = 0; i < 300; i++) rows.push({ id: `s1:${i}`, session: 's1', turn: i, at: old, path: 'p', status: 'done', attempts: 1 })
+  rows.push({ id: 's1:keep', session: 's1', turn: 999, at: old, path: 'p', status: 'pending', attempts: 0 })
+  const outboxPath = join(dir, 'evolution/outbox.jsonl')
+  await writeFile(outboxPath, rows.map((r) => JSON.stringify(r)).join('\n') + '\n', 'utf8')
+
+  const r = await store.compact(30)
+  assert.equal(r.dropped, 300)
+  const lines = (await readFile(outboxPath, 'utf8')).trim().split('\n')
+  assert.equal(lines.length, 1, '压实后只剩保留行')
+  assert.deepEqual((await store.list()).map((x) => x.id), ['s1:keep'])
+})
+
+test('episodes：planCompact / planPrune 只读，一个字节都不改', async () => {
+  const dir = await tmp()
+  const store = createEpisodeStore({ stateDir: dir, message })
+  const old = new Date(Date.now() - 40 * 86400_000).toISOString()
+  await mkdir(join(dir, 'evolution'), { recursive: true })
+  const rows = [
+    { id: 's1:1', session: 's1', turn: 1, at: old, path: 'p', status: 'done', attempts: 1 },
+    { id: 's1:2', session: 's1', turn: 2, at: old, path: 'p', status: 'pending', attempts: 0 },
+  ]
+  const outboxPath = join(dir, 'evolution/outbox.jsonl')
+  await writeFile(outboxPath, rows.map((r) => JSON.stringify(r)).join('\n') + '\n', 'utf8')
+  const before = await readFile(outboxPath, 'utf8')
+
+  const planned = await store.planCompact(30)
+  assert.equal(planned.dropped, 1)
+  assert.equal(planned.kept, 1)
+  // 预览不能真清理：早先 `dry` 走的是真的 `compact`，用户点一次「预览」就丢了一行历史。
+  assert.equal(await readFile(outboxPath, 'utf8'), before)
+  assert.deepEqual((await store.list()).map((x) => x.id), ['s1:1', 's1:2'])
+
+  const prunePlan = await store.planPrune(30)
+  assert.equal(typeof prunePlan.removed, 'number')
+  assert.equal(await readFile(outboxPath, 'utf8'), before)
+})
+
+test('episodes：prune 不删 outbox 还在引用的摘要', async () => {
+  const dir = await tmp()
+  const store = createEpisodeStore({ stateDir: dir, message })
+  const now = Date.now()
+  const old = new Date(now - 40 * 86400_000)
+  const ep = episodeOf(digestOf(1, { userTexts: ['还没复习的一轮'] }), { session: 's1', at: old.toISOString(), reason: 'signal' })
+  const written = await store.write(ep)
+  assert.ok(written.ok)
+  await mkdir(join(dir, 'evolution'), { recursive: true })
+  await writeFile(
+    join(dir, 'evolution/outbox.jsonl'),
+    JSON.stringify({ id: 's1:1', session: 's1', turn: 1, at: old.toISOString(), path: written.path, status: 'pending', attempts: 0 }) + '\n',
+    'utf8',
+  )
+  // mtime 要真的老：prune 按文件 mtime 判，不看正文里的时间。
+  await utimes(join(dir, written.path), old, old)
+
+  assert.equal((await store.planPrune(30)).removed, 0, '预览也不能把还要重试的原料算进去')
+  assert.equal((await store.prune(30)).removed, 0)
+  assert.ok(await store.read(written.path), '被引用的摘要必须还在')
 })
 
 test('episodes：prune 只删 30 天前的摘要（按文件 mtime，不看正文）', async () => {
@@ -300,12 +378,13 @@ test('extractJson：整段 / 代码围栏 / 前后带人话', () => {
 test('parseReviewItems：越界字段丢弃，缺 text 整条丢', () => {
   const items = parseReviewItems({
     memories: [
+      // `source` 是已删除的字段：传了也只会被丢掉（来源由引句核对结果决定）。
       { title: ' 包管理器 ', text: ' 用 pnpm ', kind: 'nonsense', source: 'made_up', quote: ' 以后用 pnpm ', layer: 'mars', ttlDays: -3 },
-      { text: '', source: 'user_explicit' },
-      { kind: 'fact', source: 'user_explicit' },
-      { text: '第二条', source: 'tool_verified' },
-      { text: '第三条', source: 'user_explicit' },
-      { text: '第四条该被截掉', source: 'user_explicit' },
+      { text: '' },
+      { kind: 'fact' },
+      { text: '第二条' },
+      { text: '第三条' },
+      { text: '第四条该被截掉' },
     ],
   })
   assert.equal(items.length, MAX_ITEMS_PER_REVIEW)
@@ -314,13 +393,25 @@ test('parseReviewItems：越界字段丢弃，缺 text 整条丢', () => {
   assert.equal('kind' in items[0], false)
   assert.equal('layer' in items[0], false)
   assert.equal('ttlDays' in items[0], false)
-  assert.equal(items[0].source, 'model_inference')
+  // 越界的 `source` 被丢掉：它是模型自报的档位，写入管线不再接受。
+  assert.equal('source' in items[0], false)
   assert.equal(items[0].quote, '以后用 pnpm')
-  assert.equal(items[2].source, 'user_explicit')
+  // 非法项**不占名额**：两条坏项在前面时，仍要取满三条合法项。
+  // 若把坏项也计数，模型这次复习就白丢一条记忆，而它可能正是最该留下的那条。
+  const afterBad = parseReviewItems({
+    memories: [
+      { title: 'no-text', kind: 'fact' },
+      { text: '', kind: 'fact' },
+      { text: '第一句', kind: 'fact', layer: 'global' },
+      { text: '第二句', kind: 'fact', layer: 'global' },
+      { text: '第三句', kind: 'fact', layer: 'global' },
+    ],
+  })
+  assert.deepEqual(afterBad.map((i) => i.text), ['第一句', '第二句', '第三句'])
 })
 
 test('parseReviewItems：认 items 别名，空输入不炸', () => {
-  assert.equal(parseReviewItems({ items: [{ text: 'a', source: 'user_explicit' }] }).length, 1)
+  assert.equal(parseReviewItems({ items: [{ text: 'a' }] }).length, 1)
   assert.deepEqual(parseReviewItems(null), [])
   assert.deepEqual(parseReviewItems({ memories: 'nope' }), [])
 })
@@ -341,13 +432,36 @@ test('buildReviewPrompt：压缩 episode 带 checkpoint，旧 episode 仍按轮�
   assert.match(buildReviewPrompt(episodeOf(digestOf(1), { session: 's', at: 'x', reason: 'periodic' }), []), /\(none\)/)
 })
 
+test('reviewSystemPromptFor：`kind` 四类给判据，否则 TTL 全靠模型猜', () => {
+  // `kind` 直接驱动 `ttlDaysOf`：`fact` / `procedure` 30 天复核，`preference` / `correction` 不过期。
+  // 真实数据里「必须重开子代理时先把结论写成简报」被标成 `correction`，一条会过期的做法
+  // 因此永久留在每次对话的上下文里。判据必须在提示词里，模型不能只按字面猜。
+  // **两条路径都要测**：压缩那份与旧版按轮次那份都要求模型输出 `kind`，只给其中一条判据
+  // 等于让另一条按字面猜 —— 而旧版那条此前正是缺判据的，测试也只覆盖了压缩版。
+  const checkpoint = reviewSystemPromptFor(
+    checkpointEpisodeOf({ session: 's1', seq: 9, at: 'x', checkpoint: 'checkpoint' }),
+    cfgOf(),
+  )
+  const turn = reviewSystemPromptFor(
+    episodeOf(digestOf(1), { session: 's', at: 'x', reason: 'signal' }),
+    cfgOf(),
+  )
+  for (const [label, p] of [['压缩版', checkpoint], ['轮次版', turn]]) {
+    for (const kind of ['preference', 'correction', 'fact', 'procedure']) {
+      assert.match(p, new RegExp('`' + kind + '`'), label + ' 缺 ' + kind + ' 的判据')
+    }
+    assert.match(p, /it is `procedure`, not `correction`/, label + ' 缺 procedure/correction 的分界')
+  }
+})
+
 test('reviewSystemPromptFor：压缩版明确排除任务态章节、禁止伪造引句', () => {
   const ep = checkpointEpisodeOf({ session: 's1', seq: 9, at: 'x', checkpoint: 'checkpoint' })
   const p = reviewSystemPromptFor(ep, cfgOf())
   assert.match(p, /DISCARD everything task-local/)
   assert.match(p, /Current Work, Next Step, Pending Jobs/)
   assert.match(p, /never invent a `quote`/)
-  assert.match(p, /"model_inference"/)
+  // 提示里不再让模型自报 `source`：来源由引句核对结果决定。
+  assert.equal(p.includes('"model_inference"'), false)
   // 旧 episode 仍用逐字原话那套提示（不能要求引句来自转述）。
   const old = reviewSystemPromptFor(episodeOf(digestOf(1), { session: 's', at: 'x', reason: 'signal' }), cfgOf())
   assert.match(old, /exact substring/)
@@ -410,6 +524,38 @@ test('review budget：生效配置的上限覆盖默认值，0 = 不复习', asy
   assert.equal(await budget.remaining('s1'), 1)
 })
 
+test('review budget：超期会话记录会被清掉，文件不再无限增长', async () => {
+  // 键是不断新建的会话 id，而这里只增不减 —— 真实环境十几天就攒了十几个，长年会到几千条。
+  const dir = await tmp()
+  const file = join(dir, 'reviews.json')
+  const old = new Date(Date.now() - 40 * 86400_000).toISOString()
+  const fresh = new Date(Date.now() - 2 * 86400_000).toISOString()
+  await writeFile(file, JSON.stringify({
+    sessions: {
+      'stale-a': { count: 2, at: old },
+      'stale-b': { count: 1, at: old },
+      'recent': { count: 1, at: fresh },
+    },
+  }))
+  const budget = createReviewBudget({ path: file, max: 2, message })
+  await budget.spend('recent')
+  const after = JSON.parse(await readFile(file, 'utf8'))
+  assert.deepEqual(Object.keys(after.sessions).sort(), ['recent'])
+  assert.equal(after.sessions.recent.count, 2)
+})
+
+test('review budget：时间戳读不出来的记录保留，不白送配额', async () => {
+  // 删掉一条活会话的记录 = 它重新拥有整份配额（多花一次钱）。宁可留着。
+  const dir = await tmp()
+  const file = join(dir, 'reviews.json')
+  await writeFile(file, JSON.stringify({ sessions: { 'no-date': { count: 2 } } }))
+  const budget = createReviewBudget({ path: file, max: 2, message })
+  assert.equal(await budget.remaining('no-date'), 0)
+  await budget.spend('other')
+  const after = JSON.parse(await readFile(file, 'utf8'))
+  assert.equal(after.sessions['no-date'].count, 2)
+})
+
 test('reviewer：上限设 0 时一次都不跑', async () => {
   const dir = await tmp()
   const budget = createReviewBudget({ path: join(dir, 'reviews.json'), max: 2, message })
@@ -469,7 +615,8 @@ test('reviewer：压缩条目一律按 model_inference，不带伪装成用户�
   const ep = checkpointEpisodeOf({ session: 's1', seq: 12, at: 'x', checkpoint: '## Critical Context\n- 用户希望中文回复' })
   const out = await r.review(ep, cfgOf(), { provider: 'p', model: 'm' })
   assert.equal(out.ok, true)
-  assert.equal(learner.calls[0].req.source, 'model_inference')
+  // 没有 `source` 参数了：不带引句就是推断，门禁按 `model_inference` 处理。
+  assert.equal('source' in learner.calls[0].req, false)
   assert.equal('quote' in learner.calls[0].req, false)
 })
 
@@ -497,6 +644,36 @@ test('reviewer：自动确认开着时复习直接落 active', async () => {
     { provider: 'p', model: 'm' },
   )
   assert.equal(learner.calls[0].req.autoActive, true)
+})
+
+test('假 llm 必须复刻官方 6 字段比对：少比一个就留一条测试看不见的分叉', async () => {
+  // 官方的 `callConfigEquals`（`dsh-llm` 的 `call-config.js`）比六个字段：provider / model /
+  // reasoningEffort / temperature / maxTokens / stop（数组按元素逐个比，缺省与空数组不等）。
+  // 假 llm 只比前四个时，`stop` 与 `reasoningEffort` 的分叉在测试里永远是绿的 ——
+  // 而真实环境抛 `INVALID_PREPARED_CALL`，后台复习整条通道静默失效。
+  const llm = fakeLlm()
+  const prepared = llm.prepareCall({ provider: 'p', model: 'm', temperature: 0, maxTokens: 6000 })
+  assert.equal(prepared.config.maxTokens, 6000, '调用方给了就不该被默认值顶掉')
+  // 六个字段全等时能派发。
+  const ok = prepared.stream({ ...prepared.config, messages: [], system: '', signal: undefined })
+  assert.ok(ok, '配置一致时必须能派发')
+  // 任何一处不一致都要抛 —— 逐个字段验一遍，确认假 llm 真的在比。
+  const divergences = [
+    { provider: 'other' },
+    { model: 'other' },
+    { reasoningEffort: 'high' },
+    { temperature: 0.7 },
+    { maxTokens: 1 },
+    { stop: ['END'] },
+  ]
+  for (const patch of divergences) {
+    const fresh = fakeLlm().prepareCall({ provider: 'p', model: 'm', temperature: 0, maxTokens: 6000 })
+    assert.throws(
+      () => fresh.stream({ ...fresh.config, messages: [], system: '', signal: undefined, ...patch }),
+      /INVALID_PREPARED_CALL/,
+      '假 llm 没比 ' + Object.keys(patch)[0] + '，那个字段的分叉测试永远发现不了',
+    )
+  }
 })
 
 test('reviewer：`model` 只写 model 时沿用会话的 provider', async () => {

@@ -45,12 +45,13 @@ test('两层开关：只开一层时 enabled 仍为真，另一层保持关', ()
   assert.equal(onlyGlobal.learnWorkspace, false)
 })
 
-test('inject 默认跟随 enabled：全新安装不会因为磁盘上有历史文件就注入', () => {
+test('inject 恒等于 enabled：层开关是唯一授权边界', () => {
   assert.equal(resolveEffectiveConfig(G).inject, false)
   assert.equal(resolveEffectiveConfig({ ...G, learnGlobal: true }).inject, true)
-  // 显式 false 是"只学不用"
-  assert.equal(resolveEffectiveConfig({ ...G, learnGlobal: true, inject: false }).inject, false)
-  // 显式 true 不能越过两个开关：层都关着时注入就是关着
+  // 独立的「只学不用」开关已下线：配置里残留的 `inject: false` 被刻意忽略，
+  // 否则界面上没有入口能把它改回来，那些用户的自主记忆会永久不注入。
+  assert.equal(resolveEffectiveConfig({ ...G, learnGlobal: true, inject: false }).inject, true)
+  // 反过来，显式 true 也不能越过层开关。
   assert.equal(resolveEffectiveConfig({ ...G, learnGlobal: false, learnWorkspace: false, inject: true }).inject, false)
 })
 
@@ -91,7 +92,7 @@ test('坏值回退出厂值，不抛错', () => {
   const s = normalizeEvolutionSettings({ learnGlobal: 'yes', learnWorkspace: 42, maxReviewsPerSession: 'nope' })
   assert.equal(s.learnGlobal, G.learnGlobal)
   assert.equal(s.learnWorkspace, G.learnWorkspace)
-  assert.equal(s.maxReviewsPerSession, 5)
+  assert.equal(s.maxReviewsPerSession, G.maxReviewsPerSession)
   // 合法但越界的值夹到下限 0（0 = 不复习，不是坏值）。
   assert.equal(normalizeEvolutionSettings({ maxReviewsPerSession: -3 }).maxReviewsPerSession, 0)
 })

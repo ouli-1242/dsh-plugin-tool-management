@@ -4990,6 +4990,37 @@ test('记忆读取入口保留可见：合并后的清单 / 搜索 / 正文是�
   assert.ok(!DEFAULT_HIDDEN_TOOLS.includes('memory_get'))
 })
 
+test('memory_get kind=note 的清单带类型：模型要靠它决定该不该照做', () => {
+  // 清单是模型看「有哪些笔记」的唯一入口。它显示了 status / tier / injects / pendingReason，
+  // 却不显示 `kind` —— 而 `kind` 是「这条是做法还是偏好」的唯一机器可读标记，也是保质期的来源。
+  // `evolution-list` 一直在返回 `kind`，是渲染侧没读。
+  const src = readFileSync(new URL('../src/tools/memory.ts', import.meta.url), 'utf8')
+  // 清单行与搜索行都要带：两条路径都是模型读笔记的入口。
+  const kindRenders = src.match(/\(e\.kind \? ' · ' \+ String\(e\.kind\) : ''\)/g) || []
+  assert.equal(kindRenders.length, 2, '清单与搜索两处都要渲染 kind')
+  // slot 与 id 末段相同时不重复写：模型要的是「怎么引用这条」，id 已经给了。
+  assert.match(src, /e\.key && String\(e\.key\) !== String\(e\.id\)\.slice\(String\(e\.id\)\.lastIndexOf\('\/'\) \+ 1\)/, 'slot 与 id 末段相同时省略')
+  // 搜索的字段列表里必须有 `kind`：结果行印着它，索引里没有就等于「看得见、搜不到」——
+  // 模型想「列出所有做法类笔记」时会拿到 0 条，而清单里明明每行都写着 procedure。
+  assert.match(
+    src,
+    /\[e\.id, e\.key, e\.title, e\.oneLine, e\.body, e\.boundary, e\.alias, e\.kind\]/,
+    'kind 必须在搜索字段列表里',
+  )
+})
+
+test('memory_note 能传 kind：不给时只能靠措辞猜，而「必须」会被误判成纠正', () => {
+  // `kind` 决定保质期（`ttlDaysOf`：事实 / 做法 30 天后提醒复核，偏好 / 纠正不过期）。
+  // 模型知道这句话是什么类型，但此前**没有参数可以表达** —— 只能靠 `inferKind` 按字面猜，
+  // 而「必须 / 不要」这类约束词在中文里几乎任何做法都带一个，会被判成 `correction`（不过期）。
+  // 真实数据：「必须重开子代理时先把结论写成简报」正是这样被永久固化。
+  const src = readFileSync(new URL('../src/tools/memory.ts', import.meta.url), 'utf8')
+  // 参数要在 schema 里：不在 schema 里模型看不到，也调不到。
+  assert.match(src, /kind: \{\s*\n\s*type: 'string',\s*\n\s*enum: \['preference', 'fact', 'correction', 'procedure'\]/, 'kind 必须在参数 schema 里')
+  // 还要进 payload 白名单：schema 里有、透传列表里没有，等于白写。
+  assert.match(src, /\['title', 'quote', 'boundary', 'layer', 'ttlDays', 'kind'\]/, 'kind 必须在透传白名单里')
+})
+
 test('自主笔记旧名合并成一条：出厂只藏这一条，旧名全部迁过来', () => {
   const old = ['memory_manager_learn', 'memory_manager_forget', 'memory_manager_organize', 'memory_manager_procedure_done', 'memory_manager_auto']
   assert.equal(PROACTIVE_MEMORY_TOOL, 'memory_note')
@@ -5498,10 +5529,13 @@ test('官方技能资产：office / sandbox 分开报，脚本被裁掉时报 sh
     return dir
   }
   try {
-    // 两个包都不在：都应是可选缺席，不能报成宿主故障。
+    // 三个来源都不在：都应是可选缺席，不能报成宿主故障。
+    // office / sandbox 来自包内 assets；预设技能来自 agent-preset 包的 skills/ 目录，
+    // 三者是不同的宿主形态，缺任何一个都只是「这份部署没有」，不是故障。
     const none = inspectStaticSkillAssets(hostRoot)
-    assert.equal(none.length, 2)
+    assert.equal(none.length, 3)
     assert.ok(none.every((item) => item.optional === true && item.state === 'not-available'))
+    assert.deepEqual(none.map((item) => item.id).sort(), ['official-preset-skills', 'official-sandbox-asset', 'official-skill-assets'])
 
     const office = makePkg('@deepseek-ai/dsh-skill-office')
     mkdirSync(join(office, 'assets', 'office-docx'), { recursive: true })
@@ -5585,9 +5619,13 @@ test('新增服务探针：缺成员 / 形状变化都在对应能力上报出�
   assert.match(projection({ cachedSnapshot: () => ({ values: null }), cachedPredecessorTitle: () => undefined }), /values/)
 
   const subagents = probeOf('subagents.runtime')
-  assert.equal(subagents({ list: () => ['in-process'], startActivation: async function () {} }), undefined)
-  assert.match(subagents({ list: () => ['in-process'], startActivation: function () {} }), /异步/)
-  assert.match(subagents({ list: () => [1], startActivation: async function () {} }), /字符串/)
+  // 判据是 `getProvider(name)`：两代宿主都有这个只读入口，而枚举名册的 `list()` 只在一代上有。
+  // 用 `list()` 当判据会让另一代永远判成「运行时不可用」，于是重复挂同名 provider 直接撞官方报错。
+  const okRuntime = { getProvider: (name) => (name === 'spawn' ? {} : undefined), startActivation: async function () {} }
+  assert.equal(subagents(okRuntime), undefined)
+  assert.match(subagents({ startActivation: async function () {} }), /getProvider/)
+  assert.match(subagents({ getProvider: () => ({}), startActivation: async function () {} }), /名册语义/)
+  assert.match(subagents({ getProvider: () => undefined, startActivation: function () {} }), /异步/)
 
   const llm = probeOf('llm.model-catalog')
   assert.equal(llm({
@@ -5617,7 +5655,9 @@ test('客户端 UI 契约与多文件 canary：标记都落在 lib/client.js，�
     '@deepseek-ai/dsh-client-ui-conversation': ['storeFor'],
     '@deepseek-ai/dsh-client-ui-layout': ['activePanelId', 'selectPanel'],
     '@deepseek-ai/dsh-client-ui-workspace': ['pickDirectory'],
-    '@deepseek-ai/dsh-api-session-controller': ['reflect.provide("sessions"', 'projectList'],
+    // needle 只认标识符、不认包裹它的引号：官方发布形态一变（压缩构建把 `"` 换成反引号），
+    // 带引号的 needle 就会误报漂移，而契约其实没变。作用域标签与注册点同处，一并钉住。
+    '@deepseek-ai/dsh-api-session-controller': ['reflect.provide(', 'session-controller.client.sessions', 'projectList'],
   }
   for (const [pkg, needles] of Object.entries(expected)) {
     const contract = byPackage.get(pkg)
@@ -5641,7 +5681,7 @@ test('观测包基线：office / sandbox / LibreOffice Kit 都登记，且没有
     assert.ok(item, `缺少观测包 ${name}`)
     assert.equal(item.observed, true)
   }
-  assert.equal(HOST_PACKAGE_BASELINES.find((item) => item.name === '@deepseek-ai/libreoffice-kit').baselineVersion, '0.1.5')
+  assert.equal(HOST_PACKAGE_BASELINES.find((item) => item.name === '@deepseek-ai/libreoffice-kit').baselineVersion, '0.2.3')
 })
 
 test('目录上限：夹取语义是"0 / 非法回出厂"，合法值夹进范围；上限走函数式时按次求值', async () => {
