@@ -141,7 +141,12 @@ export async function migrateLegacyAutoNotes(deps: {
   return report
 }
 
-/** 独立库里的删除：正文移进 `evolution/trash/`，可人工找回，不碰用户记忆回收站。 */
+/**
+ * 提升为用户记忆后清理原件：移进 `evolution/trash/`，可人工找回。
+ *
+ * 正文已经复制成用户记忆，这里的副本只防"提升写失败后原件也没了"；普通删除走
+ * {@link moveAutoNoteToTrash}，不再落进这个隐藏目录。
+ */
 export async function trashAutoNote(autoRoot: string, stateDir: string, id: string): Promise<boolean> {
   const slash = id.lastIndexOf('/')
   if (slash <= 0) return false
@@ -215,10 +220,10 @@ export async function findAutoTrashByNoteId(stateDir: string, id: string): Promi
  *
  * 为什么是复制不是移动：维护扫描会在工作区目录回来时按 id 恢复条目，catalog 重建也要
  * 能读到这条 archived 记录。移动会把「恢复」变成一条找不到文件的死路。永久删除由
- * `purgeAutoTrash` 负责，会同时删掉原文件。
+ * `purgeTrash` 负责，会同时删掉原文件。
  *
- * 同一 id 已有条目时直接返回旧 trashId：重复停用（例如维护扫描与用户操作撞车）不该在
- * 回收站里堆出第二份。
+ * 同一 id 已有条目时复用旧 trashId，并用当前正文刷新 `rule.md`：重复停用（例如维护扫描
+ * 与用户操作撞车）不该在回收站里堆出第二份，恢复时也不该拿到旧内容。
  */
 export async function archiveAutoNote(
   autoRoot: string,
@@ -239,7 +244,21 @@ export async function archiveAutoNote(
     return null
   }
   const existing = await findAutoTrashByNoteId(stateDir, id)
-  if (existing !== null) return existing
+  if (existing !== null) {
+    try {
+      await writeFile(
+        join(trashDirOf(stateDir, existing), 'rule.md'),
+        rewriteFrontmatterFields(text, {
+          auto_status: 'archived',
+          auto_updated: new Date().toISOString(),
+        }),
+        { encoding: 'utf8', mode: 0o600 },
+      )
+      return existing
+    } catch {
+      return null
+    }
+  }
   const trashId = newTrashId()
   const dir = trashDirOf(stateDir, trashId)
   const deletedAt = new Date().toISOString()
@@ -267,6 +286,35 @@ export async function archiveAutoNote(
     await rm(dir, { recursive: true, force: true }).catch(() => undefined)
     return null
   }
+}
+
+/**
+ * 用户否决 / 删除：把正文移进统一回收站，并删除独立库里的原件。
+ *
+ * 与 {@link archiveAutoNote} 的分工：这里给"用户不要这条了"用，原件必须消失；维护扫描
+ * 仍用复制语义，工作区目录回来时要按 id 把 archived 条目恢复。
+ *
+ * @returns 回收站条目 id；复制或删除失败返回 `null`（原文件未删，调用方不得继续清 state）。
+ */
+export async function moveAutoNoteToTrash(
+  autoRoot: string,
+  stateDir: string,
+  id: string,
+  layer: MemoryLayer,
+): Promise<string | null> {
+  const trashId = await archiveAutoNote(autoRoot, stateDir, id, layer)
+  if (trashId === null) return null
+  const slash = id.lastIndexOf('/')
+  const group = id.slice(0, slash)
+  const name = id.slice(slash + 1)
+  const src = join(autoRoot, group, `${name}.md`)
+  try {
+    await rm(src, { force: true })
+  } catch {
+    return null
+  }
+  if (await exists(src)) return null
+  return trashId
 }
 
 /** 从回收站副本还原正文到独立库；目标已存在时拒绝（不覆盖正在用的条目）。 */

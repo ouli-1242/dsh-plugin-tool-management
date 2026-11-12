@@ -149,6 +149,9 @@ export const OP_REGISTRY: Readonly<Record<string, OpClass>> = Object.freeze({
   // 而新学的一条下一轮就会进注入段，确实改变了这个场景看到的东西。
   'evolution-learn': { write: true, frozen: true },
   'evolution-forget': { write: true, frozen: true },
+  // 否决候选：正文移进回收站，不写墓碑。与 approve 同权 —— 都是用户对自己刚看到的一条
+  // 记忆做处置，锁场景挡不住。
+  'evolution-discard': { write: true },
   // 确认候选：改的是同一条记忆的状态位（文件 + state + 索引 + catalog）。
   // 比 learn 更"用户自己的动作"，所以**不冻结** —— 锁定的是场景档案，不是"用户能不能
   // 确认自己刚看到的一条记忆"。这与 `rules-scene-lock` 不被自己挡住是同一条理由。

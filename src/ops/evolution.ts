@@ -42,8 +42,6 @@ export interface EvolutionOpDeps {
    * 手写的那一份与实现分叉时编译器不会报错（方法参数双变），后果是某个参数被静默忽略。
    */
   learner?: Learner
-  /** 把一条记忆移进回收站（记忆域的 `rules-remove`）。forget 用它，不自己删文件。 */
-  removeMemory?(id: string): Promise<{ ok: boolean; error?: string }>
   /**
    * 会话 id → 工作目录。客户端的「本工作区」那一行只知道自己当前是哪个对话，
    * 不知道 cwd；宿主那边的映射只有装配层有（与 `scope-sessions-list` 同一份）。
@@ -467,28 +465,36 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
       }
     },
 
-    /** 忘掉一条：正文进回收站，写墓碑（30 天内自动路径不能复活）。 */
+    /** 忘掉一条：正文移进统一回收站，写墓碑（30 天内自动路径不能复活）。 */
     'evolution-forget': async (args: any) => {
       if (!learner) return { ok: false, error: '自主记忆尚未启用', code: 'unavailable' }
       try {
         const id = String(args?.id ?? '')
         if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
         const actor = typeof args?.actor === 'string' ? args.actor : 'model'
-        const result = await learner.forget(id, {
-          actor,
-          ...(deps.removeMemory
-            ? {
-                remove: async (x: string) => {
-                  const r = await deps.removeMemory!(x)
-                  return r.ok === true
-                },
-              }
-            : {}),
-        })
+        const result = await learner.forget(id, { actor })
         if (result && result.ok) runtime.invalidate()
         return result
       } catch (e) {
         return { ok: false, error: message(e), code: 'forget-failed' }
+      }
+    },
+
+    /**
+     * 否决一条候选：正文移进统一回收站，不写墓碑。
+     *
+     * 与 `evolution-forget` 分开：否决只表达「这条不要」，不该让同义内容 30 天内学不回来。
+     */
+    'evolution-discard': async (args: any) => {
+      if (!learner) return { ok: false, error: '自主记忆尚未启用', code: 'unavailable' }
+      try {
+        const id = String(args?.id ?? '')
+        if (id === '') return { ok: false, error: 'missing id', code: 'bad-args' }
+        const result = await learner.discard(id, { actor: 'user' })
+        if (result && result.ok) runtime.invalidate()
+        return result
+      } catch (e) {
+        return { ok: false, error: message(e), code: 'discard-failed' }
       }
     },
 

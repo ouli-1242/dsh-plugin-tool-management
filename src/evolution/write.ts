@@ -24,7 +24,7 @@ import {
 } from '../memories/constants.js'
 import {
   archiveAutoNote, backfillArchivedTrash, dropAutoTrashEntry, findAutoTrashByNoteId,
-  readAutoTrashManifest, restoreAutoNoteFromTrash, trashAutoNote,
+  moveAutoNoteToTrash, readAutoTrashManifest, restoreAutoNoteFromTrash, trashAutoNote,
 } from './notes.js'
 import { rewriteFrontmatterFields } from '../skills/frontmatter.js'
 import { textWidthOf, truncateToWidth } from '../text-width.js'
@@ -911,10 +911,10 @@ export function createLearner(deps: LearnDeps) {
     }
   }
 
-  /** 忘掉一条：正文进回收站，状态转 archived，写墓碑。 */
+  /** 忘掉一条：正文移进统一回收站，删 state，写墓碑。 */
   async function forget(
     id: string,
-    opts: { actor?: string; remove?: (id: string) => Promise<boolean> } = {},
+    opts: { actor?: string } = {},
   ): Promise<LearnResult | { ok: true; id: string; layer: MemoryLayer; status: 'archived'; tier: EvidenceTier; merged: false; supersedes: string[] }> {
     return deps.withWriteLock(async () => {
       const read = await state.readFresh()
@@ -944,24 +944,14 @@ export function createLearner(deps: LearnDeps) {
       // 这条防线整条失效，只剩同 key 那一条在起作用。`promote` 一直用的是正文，这里对齐。
       const body = normalizeForCompare(bodyOf(raw))
 
-      // 先把正文标成 archived，再交给回收站。
-      //
-      // 为什么非改文件不可：注入只读 catalog，但 catalog 会被**全量重建**（启动 / 任何记忆写
-      // 之后），而重建读的是 frontmatter。文件里还写着 `auto_status: active` 的话，删掉的那条
-      // 会在下一次重建时原样复活 —— 用户会看到"删了又回来了"，且中间没有任何提示。
-      // 顺序也重要：先改后搬，搬走了就再也改不到了。
+      // 先搬再删 state：搬失败时原文件还在，state / 索引 / catalog 都不能动，否则用户
+      // 既看不到这条（catalog 已删），回收站里也没有，只剩磁盘上一份孤儿文件。
       if (raw !== '') {
-        await writeFileAtomically(
-          docPath,
-          rewriteFrontmatterFields(raw, { auto_status: 'archived', auto_updated: new Date().toISOString() }),
-        ).catch(() => {})
+        const moved = await moveAutoNoteToTrash(notesRoot, deps.stateDir, id, layer)
+        if (moved === null) {
+          return { ok: false, code: 'trash-failed', error: `failed to move "${id}" to the recycle bin` }
+        }
       }
-
-      // 正文进回收站由调用方给（记忆域已有的 `rules-remove` 那条路，它自己会把文件放进
-      // 回收站）；给不了就只标状态、文件留着 —— 少删一次好过悄悄真删。
-      // 参数名必须与 `EvolutionOpDeps.learner.forget` 一致：叫 `trash` 而调用方传 `remove`
-      // 时，严格结构类型**不会报错**（参数双变），症状是"忘了但文件还在"，没有任何提示。
-      if (opts.remove) await opts.remove(id).catch(() => false)
 
       // 墓碑：key、文本指纹与原文都写。原文是给相似度拦截用的 —— 用户删的是
       // 「以后都用 pnpm」，模型换个说法写「包管理器统一 pnpm」时，精确哈希拦不住。
@@ -979,8 +969,6 @@ export function createLearner(deps: LearnDeps) {
           actor: opts.actor ?? 'model',
         })
       }
-      if (entry) pushTransition(entry, entry.transitions.at(-1)?.to ?? 'active', 'archived', 'learn', 'forgotten by user', Date.now())
-      else st.entries[id] = { evidence: [], counters: emptyCounters(), transitions: [] }
       delete st.entries[id]
       bumpRevision(st)
 
@@ -991,7 +979,9 @@ export function createLearner(deps: LearnDeps) {
         index.rules[id] = { ...index.rules[id], enabled: false, updatedAt: new Date().toISOString() }
         await writeIndex(indexDir, index)
       }
-      await demoteCatalog(id, 'archived')
+      // 不能降级成 archived：正文已经不在独立库里，catalog 再留一条 archived 会让
+      // 「已归档」数永远清不掉，重建时还会把用户删掉的东西重新数出来。
+      await dropCatalogEntry(id)
       deps.invalidateSnapshot()
       return { ok: true, id, layer, status: 'archived' as const, tier: 'inferred' as const, merged: false as const, supersedes: [] }
     })
@@ -1017,6 +1007,71 @@ export function createLearner(deps: LearnDeps) {
     }
     delete entry.pendingReason
     entry.counters = entry.counters ?? emptyCounters()
+  }
+
+  /**
+   * 否决一条：正文移进统一回收站，保留 state 证据，但不写墓碑。
+   *
+   * 与 {@link forget} 的区别：「这条不要」不等于「这个说法以后都别学」。墓碑会拦住同 key
+   * 与相似正文 30 天，那是删除的语义，不该由一次否决产生。
+   */
+  async function discard(
+    id: string,
+    opts: { actor?: 'learn' | 'curator' | 'user' | 'sweep' | 'dream' | 'system'; reason?: string } = {},
+  ): Promise<LearnResult | { ok: true; id: string; layer: MemoryLayer; status: 'archived'; tier: EvidenceTier; merged: false; supersedes: string[] }> {
+    return deps.withWriteLock(async () => {
+      const read = await state.readFresh()
+      if (!read.ok) return { ok: false, code: 'state-unreadable', error: read.error }
+      const st = read.state
+      const slash = id.lastIndexOf('/')
+      if (slash <= 0 || slash === id.length - 1) return { ok: false, code: 'bad-id', error: `not a memory id: ${id}` }
+      const group = id.slice(0, slash)
+      const name = id.slice(slash + 1)
+      const layer = layerOfGroup(group)
+      const raw = await safeRead(join(notesRoot, group, name + '.md'))
+      // 源文件可能已经不在了（重试 / 旧版迁移留下的半成品）：只要回收站已有副本，
+      // 就继续把残留的索引与 catalog 清干净，而不是报 not-found 让用户卡住。
+      if (raw === '') {
+        if (await findAutoTrashByNoteId(deps.stateDir, id) === null) {
+          return { ok: false, code: 'not-found', error: `no such learned note: ${id}` }
+        }
+      } else {
+        const moved = await moveAutoNoteToTrash(notesRoot, deps.stateDir, id, layer)
+        if (moved === null) {
+          return { ok: false, code: 'trash-failed', error: `failed to move "${id}" to the recycle bin` }
+        }
+      }
+
+      const entry = st.entries[id] ?? {
+        evidence: [],
+        counters: emptyCounters(),
+        transitions: [],
+      }
+      st.entries[id] = entry
+      pushTransition(
+        entry,
+        entry.transitions.at(-1)?.to ?? 'active',
+        'archived',
+        opts.actor ?? 'user',
+        opts.reason ?? 'discarded to the recycle bin',
+        Date.now(),
+      )
+      bumpRevision(st)
+      const written = await state.write(st)
+      if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
+
+      const index = await readIndex(indexDir)
+      if (index.rules[id]) {
+        delete index.rules[id]
+        await writeIndex(indexDir, index)
+      }
+      await dropCatalogEntry(id)
+      deps.invalidateSnapshot()
+      return {
+        ok: true, id, layer, status: 'archived' as const,
+        tier: tierOf(entry.evidence), merged: false as const, supersedes: [],
+      }
+    })
   }
 
   /**
@@ -1654,9 +1709,8 @@ export function createLearner(deps: LearnDeps) {
   /**
    * 永久删除一条回收站里的自动记忆。
    *
-   * 复用 `forget` 写墓碑、清 state、停索引；再删掉原地那份正文与回收站副本。
-   * 不走 `forget` 的 `remove` 回调：那条路会把正文移进 `evolution/trash`，对「永久删除」
-   * 只是换了个隐藏位置，用户以为清掉了、磁盘上还留着一份。
+   * `forget` 会把原地正文移进统一回收站（同一条目会复用 trashId），这里再删掉副本。
+   * 不直接 rm 正文：墓碑、state、索引、catalog 要一起清，少一步都会留下"删了又回来"。
    */
   async function purgeTrash(trashId: string): Promise<LearnResult> {
     const manifest = await readAutoTrashManifest(deps.stateDir, trashId)
@@ -1676,22 +1730,33 @@ export function createLearner(deps: LearnDeps) {
       }
     }
     const result = await forget(manifest.autoId, { actor: 'user' })
-    if (!result.ok) return result
-    try {
-      await rm(docPath, { force: true })
-    } catch (e) {
-      // 墓碑与 state 已落盘；正文删不掉时保留回收站条目，让用户能再点一次，别报成功。
-      return { ok: false, code: 'io', error: e instanceof Error ? e.message : String(e) }
+    if (!result.ok) {
+      // 旧版只留了副本、没有 state / 正文的条目：没有可忘的东西，删副本即完成。
+      if (raw === '' && result.code === 'not-found') {
+        await dropAutoTrashEntry(deps.stateDir, trashId)
+        return {
+          ok: true, id: manifest.autoId, layer: manifest.autoLayer, status: 'archived',
+          tier: 'inferred', merged: false, supersedes: [],
+        }
+      }
+      return result
     }
+    await rm(docPath, { force: true }).catch(() => undefined)
     await dropAutoTrashEntry(deps.stateDir, trashId)
     return result as LearnResult
   }
 
   /**
-   * 启动时把旧版本留下的 archived 条目补进统一回收站。
+   * 启动时整理统一回收站里的自主记忆。
    *
+   * 两件事：
+   *   1. 旧版的「停用」只改 frontmatter，补一份回收站副本，升级后不丢恢复入口；
+   *   2. 用户否决 / 手工停用留下的 archived 条目，副本齐了就从独立库移除 —— 卡片不再
+   *      展示「已归档」，这些文件也不该继续躺在 `notes/` 里。
+   *
+   * 维护扫描 / 整理产生的 archived 不动：工作区目录回来时要按 id 恢复，它们留在原地。
    * 读 catalog 而不是 state：archived 是 frontmatter 派生的状态，catalog 与卡片同一口径。
-   * 调用方要在 `rebuildCatalog()` 之后跑，保证刚重建出来的条目也覆盖到；失败不阻断启动。
+   * 调用方要在 `rebuildCatalog()` 之后跑；失败不阻断启动。
    *
    * @returns 本次新补进回收站的条目数。
    */
@@ -1706,7 +1771,18 @@ export function createLearner(deps: LearnDeps) {
       .filter(([, e]) => e.status === 'archived')
       .map(([id, e]) => ({ id, layer: e.layer }))
     if (archived.length === 0) return 0
-    return backfillArchivedTrash(notesRoot, deps.stateDir, archived)
+    const added = await backfillArchivedTrash(notesRoot, deps.stateDir, archived)
+
+    const read = await state.readFresh()
+    if (!read.ok) return added
+    for (const entry of archived) {
+      const transitions = read.state.entries[entry.id]?.transitions ?? []
+      const last = transitions.at(-1)
+      if (last?.to !== 'archived' || last.actor !== 'user') continue
+      // 迁移失败不阻断：catalog 里仍是 archived，卡片已按 live 过滤，下次启动会再试。
+      await discard(entry.id, { actor: 'user', reason: last.reason || 'migrated from archived' })
+    }
+    return added
   }
 
   /**
@@ -1840,7 +1916,7 @@ export function createLearner(deps: LearnDeps) {
   }
 
   return {
-    learn, preview, forget, approve, setStatus, setEnabled, promote, organize, applyOrganize, describe, update,
+    learn, preview, forget, discard, approve, setStatus, setEnabled, promote, organize, applyOrganize, describe, update,
     restoreFromTrash, purgeTrash, backfillTrash, noteInjected, noteRead, markReview, markReviewed,
     /** 目录最近一次没更新成功的原因；`undefined` = 最近一笔写入没有留下降级。 */
     catalogDegraded: (): string | undefined => catalogDegraded,

@@ -66,7 +66,6 @@ import { attachColdPath } from './evolution/cold.js'
 import { createEpisodeStore } from './evolution/episodes.js'
 import { createReviewBudget, createReviewer } from './evolution/review.js'
 // 维护扫描：TTL / 会话 GC / 配额。
-import { trashAutoNote } from './evolution/notes.js'
 import { healthOf, runSweep, shouldSweepNow, type SweepEntry, type SweepReport } from './evolution/maintenance.js'
 // 真源状态（证据 / 计数器 / 墓碑）：读坏就停写，不静默覆盖。
 import { createEvolutionState, tierOf } from './evolution/state.js'
@@ -5024,8 +5023,6 @@ export default {
     // 自主记忆的 op 表：HTTP 层与工具层**共用同一份实例**。
     // 为什么要共用：`learn` 的两道门禁（工具表可见性 + op 的开关判断）必须读同一份配置，
     // 各建一份会在热更新后出现"工具说开着、op 说关着"的错位。
-    // `removeMemory` 复用记忆域已有的删除路径（进回收站 + 清索引），不自己 rm ——
-    // 「删除都进回收站」这条 README 承诺没有例外。
     // 冷路径的句柄：op 表先于 `attachColdPath` 装配（开关打开前界面也要能查队列），
     // 所以这里先留一个可变槽，装配完再填。op 里拿到的是 getter 的**当前值**。
     let coldHandle: ReturnType<typeof attachColdPath> | null = null
@@ -5041,16 +5038,6 @@ export default {
       config: evolutionConfig,
       runtime: evolutionRuntime,
       learner: autoLearner,
-      // 自主记忆的正文住独立库，不能走用户记忆的 rules-remove（那边找不到文件，
-      // 还会把用户记忆回收站写脏）。移进 evolution/trash/，可人工找回。
-      removeMemory: async (id: string) => {
-        const ok = await trashAutoNote(
-          memoriesService.autoAccess.autoNotesRoot,
-          memoriesService.autoAccess.stateDir,
-          id,
-        ).catch(() => false)
-        return ok ? { ok: true } : { ok: false, error: `not found: ${id}` }
-      },
       // 界面的「本工作区」开关只知道自己当前是哪个对话：按会话 id 查一次 cwd。
       // 与 scope 页同一份来源（`scopeSessionRows`），不另建一套映射 —— 两套迟早分家，
       // 症状是"下拉框里的工作区"和"记忆写入的工作区"不是同一个。
@@ -5503,8 +5490,8 @@ export default {
       // + subagent-create/update/delete（写，writeOps 已派生进门禁）。
       ...subagentService.ops,
       // 自主记忆的策略 op（ops/evolution.ts）：status / settings / toggle / learn / forget / list。
-      // 写端点由 request-gate 的回环校验兜底；`removeMemory` 复用记忆域已有的删除路径
-      // （进回收站 + 清索引），不自己 rm —— 「删除都进回收站」这条 README 承诺没有例外。
+      // 写端点由 request-gate 的回环校验兜底；正文的移动与回收站由 learner 自己负责，
+      // 装配层不再注入第二套删除路径。
       ...evolutionOpsTable,
       // 兼容 / 注入 / 备份域（ops/compat.ts 提供）：compat-status / preset-reach /
       // inject-settings / backups-list / backups-clean / injection-live。
