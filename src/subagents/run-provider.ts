@@ -330,10 +330,10 @@ export function createRunProvider(deps: RunProviderDeps): Record<string, any> {
     }
 
     const startSignal = signal ?? new AbortController().signal
-    // 激活请求在两代宿主上是两种形状：一代把任务字段装在 `request` 里，一代把它们平铺在顶层。
-    // 官方 `SubagentActivationSpec extends Omit<SubagentStartRequest, 'label' | 'signal'>`：
-    // 字段全在**最外层**（`cwd` / `prompt` / `parent` / `agentPreset` / `agentOptions` /
-    // `maxDepth`），没有嵌套的 `request`。所以这里拼成一份扁平载荷。
+    // 激活请求的任务字段平铺在**最外层**（`SubagentActivationSpec extends Omit<SubagentStartRequest,
+    // 'label' | 'signal'>`：`cwd` / `prompt` / `parent` / `agentPreset` / `agentOptions` / `maxDepth`）。
+    // rc.1 及更早把它们装在嵌套的 `request` 里，本插件不支持那种形状 —— 适配范围下界因此落在
+    // rc.2（见 `compat/probe.ts` 的 EXPECTED_PEER_RANGE）。所以这里拼成一份扁平载荷。
     const request = {
       parent: parentAgent,
       prompt: [{ type: 'text', text: kind === 'fork' ? renderPersonaPrompt(p) + '\n\n' + task : task }],

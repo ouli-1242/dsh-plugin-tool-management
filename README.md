@@ -163,7 +163,7 @@ dsh plugin --profile desktop add dsh-plugin-tool-management@latest  # 桌面版
 | 装完没有页面          | 硬刷新浏览器；还不行就重启 DSH。                                                            |
 | 模型调不到某条工具    | 兼容页 →「模型工具表」，先选对当前对话 / 工作区（出厂默认关着 18 条）。面板和脚本不受影响。 |
 | 升级 DSH 后动作不可用 | 兼容页看降级原因；`node scripts/doctor.mjs`，再 `node scripts/host-deps.mjs --fix`。        |
-| 版本对不上            | 只适配 DSH **0.2.2**（`>=0.2.2-rc.1 <0.2.3`），跨代升级要等插件同步适配；旧宿主请装 0.21.x。 |
+| 版本对不上            | 只适配 DSH **0.2.2**（`>=0.2.2-rc.2 <0.2.3`），跨代升级要等插件同步适配；`0.2.2-rc.1` 请装 0.22.5，更早宿主装 0.21.x。 |
 | 重复 MCP 页签         | 删掉 `cordis.patch.yml` 里的旧 loader 行，再重启。                                          |
 | 改坏配置 DSH 起不来   | 从 `~/.dsh/tool-management/backups/` 取最近的 `cordis.patch.yml.*.bak-*` 覆盖回去。         |
 
