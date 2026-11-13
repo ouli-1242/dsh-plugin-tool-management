@@ -93,7 +93,7 @@
 - 该规则只在 dsh 的 minor 与 patch 都是个位数时成立。任一变成两位数（如 `0.2.10`）会与「`0.21.0` = dsh `0.2.1`」撞车，dsh 换主版本同理 —— 此时停下来问用户，不要自己猜。
 - **一个插件版本可以声明适配多个宿主版本**，与「每次插件版本对应一个官方版本」的区别在适配清单，不在版本号。清单怎么记、发版时怎么追加或重置，见 `docs/HOST-ADAPT.md`。
 - **已发布的插件版本一律保留**：不撤回、不标 `deprecated`；旧宿主仍可装对应旧版本。
-- 换版本号要动两处：`package.json` 的 `version`（运行时 `PKG_VERSION` 只从这里读）、`CHANGELOG.md` 的版本标题。
+- 换版本号要动三处：`package.json` 的 `version`（运行时 `PKG_VERSION` 只从这里读）、`CHANGELOG.md` 的版本标题、`package-lock.json` 的 `version`（根与 `packages[""]` 两处）。lock 用 `npm install --package-lock-only --ignore-scripts` 生成，不手改。
 - **tag 带 `v`，Release 标题不带**：`git tag -a v0.21.5`，`gh release create v0.21.5 --title "0.21.5"`。历史 tag 全是 `v*`，`npm version` 默认也产 `v*`，换成不带 v 会让以后按 `tags: v*` 匹配的 CI 漏触发；而 Release 标题只是展示文本，URL 始终取 tag 名（`/releases/tag/v0.21.5`），改标题零副作用。
 - 创建 Release 必须显式 `--repo ouli-1242/dsh-plugin-tool-management`：checkout 里若还挂着别的 remote（如 `upstream`），`gh` 会把它当成父仓库，否则报「tag 未推送到 upstream」。
 
