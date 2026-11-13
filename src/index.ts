@@ -6362,7 +6362,21 @@ export default {
       // 同一行里登记 `selfToolNames`：六个域的构建器全部经这个漏斗，所以它就是"本插件注册了
       // 哪些工具"的权威清单。`tools.register` 抛（重名 / 保留名）时不登记 —— 那份不在表里，
       // 也不该出现在「工具限制」的候选里。
-      register: (def: ToolDefinition) => { recordToolSize(def); tools.register(def); selfToolNames.add(String(def.name)) },
+      //
+      // 重名要**就地跳过**而不能让它抛：异常冒到 apply() 兜底会把后面所有装配（包括面板的
+      // HTTP 路由）一起带走。先查全局视图（本插件的工具都注册在这一层），撞名时让先到者赢，
+      // 其余工具照常注册。只拦"已存在"，schema 非法 / 保留名之类的自家装配错误照旧抛。
+      register: (def: ToolDefinition) => {
+        const name = String(def.name)
+        if (tools.get(name) !== undefined) {
+          console.error('[dsh-plugin-tool-management] tool registration skipped: '
+            + name + ' is already registered by another plugin')
+          return
+        }
+        recordToolSize(def)
+        tools.register(def)
+        selfToolNames.add(name)
+      },
       lockedSceneGuard,
       syncSwitchToScene,
       // 错误句与回执里点名工具前要先问一句：工具表按作用域各一份，还要算上该 agent 的
