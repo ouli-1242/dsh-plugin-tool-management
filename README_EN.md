@@ -112,11 +112,11 @@ Off by default. When on, the agent records preferences, facts and corrections wo
 
 Six operation domains, **23 model tools**: list, read, create, update, delete, toggle, enter or leave a scene, apply a prompt, run a persona. 22 of them can be toggled individually in the tool table; `memory_manager_note` follows the autonomous-memory master switch.
 
-- **Only 5 ship enabled** (`tool_manager_tools` / `memory_manager_get` / `memory_manager_remember` / `skill_manager_read` / `subagent_manager_run`); 17 manual toggles stay off by default. `memory_manager_note` follows the master switch separately, so a request carries 5 tools when it is off and 6 when it is on. Off means **not in the schema at all** — the model cannot see them, let alone call them.
+- **Only 5 ship enabled** (`tool_manager_switch` / `memory_manager_get` / `memory_manager_remember` / `skill_manager_read` / `subagent_manager_run`); 17 manual toggles stay off by default. `memory_manager_note` follows the master switch separately, so a request carries 5 tools when it is off and 6 when it is on. Off means **not in the schema at all** — the model cannot see them, let alone call them.
 - **Scoped writes**: the model writes to the current layer by default and the receipt says which one; `scope: "global"` is required to touch everything.
 - **Confirmation cards**: stopping servers, deleting, machine-wide toggles and similar writes ask first; recovery actions (restart, restore, undo apply) go straight through. With the host's `never` approval policy no card appears: writes that need confirmation are rejected by the host, while recovery actions still go through.
 - **Per-tool control**: the model-tool table on the Host page adjusts visibility per layer. All 22 on is ~6k tokens/turn; profiles can be saved per task and switched together with a scene.
-- **The model can switch tools back on**: the always-on `tool_manager_tools` lists the tools that are off in this conversation (name, purpose, ≈tokens) and turns them on as needed — when the user asks for a scene whose tools happen to be off, the model has a way forward instead of bouncing back to the user.
+- **The model can switch tools back on**: the always-on `tool_manager_switch` lists the tools that are off in this conversation (name, purpose, ≈tokens) and turns them on as needed — when the user asks for a scene whose tools happen to be off, the model has a way forward instead of bouncing back to the user.
 
 ## The Host page
 

@@ -86,7 +86,7 @@ export function renderSkillCatalog(
    */
   layer?: SkillCatalogLayer,
   /**
-   * 控制面工具（`tool_manager_tools`）在这个 agent 手里吗：截断尾句的中间档出口。
+   * 控制面工具（`tool_manager_switch`）在这个 agent 手里吗：截断尾句的中间档出口。
    * 与 `listToolVisible` 同一判据来源（按 agent）；缺席时按"在手里"算，
    * 与 `listToolVisible` 的缺省口径一致 —— 它出厂常驻，且模型自己关不掉它。
    */
@@ -151,7 +151,7 @@ export function renderSkillCatalog(
     enveloped.push('', listToolVisible
       ? `(${hidden} more not listed — see them with \`skill_manager_list\`.)`
       : controlVisible
-        ? `(${hidden} more not listed — \`skill_manager_list\` is disabled in this session; enable it with \`tool_manager_tools\` to see them.)`
+        ? `(${hidden} more not listed — \`skill_manager_list\` is disabled in this session; enable it with \`tool_manager_switch\` to see them.)`
         : `(${hidden} more not listed — \`skill_manager_list\` is disabled in this session; ask the user to enable it.)`)
   }
   return enveloped.join('\n')
@@ -244,7 +244,7 @@ export interface SkillCatalogDeps {
    */
   listToolVisible?: (agent?: unknown) => boolean
   /**
-   * 控制面工具（`tool_manager_tools`）在这个 agent 手里吗：截断提示中间档（指自举）的前提。
+   * 控制面工具（`tool_manager_switch`）在这个 agent 手里吗：截断提示中间档（指自举）的前提。
    * 与 `listToolVisible` 同一份判据（index.ts 的 `toolVisibleFor`）；缺席按在手里算。
    */
   controlVisible?: (agent?: unknown) => boolean

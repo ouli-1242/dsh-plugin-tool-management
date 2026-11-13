@@ -112,7 +112,7 @@ export interface ToolTableSettings {
  * 平时也用不到模型自己伸手**。分五组：
  *   · **写侧五条** —— 三个 `*_save`（MCP / 技能 / 人设：配置本体在面板上改）+
  *     `prompt_manager_apply`（当前生效的那份本来就在 `Current prompt` 注入段里）+
- *     `plugin_manager_remove`（删除进回收站可恢复，但常态下由面板承担）。
+ *     `plugin_manager_trash`（删除进回收站可恢复，但常态下由面板承担）。
  *   · **读侧四条** —— `mcp_manager_list` / `skill_manager_list` / `prompt_manager_list` /
  *     `scene_manager_list`。会话开头注入的那几段目录已经写了当前有什么，模型不必每轮
  *     再带一份查询工具。
@@ -122,7 +122,7 @@ export interface ToolTableSettings {
  *   · **开关四条** —— `skill` / `memory` / `subagent` 三个 `_switch`（用户：「平时使用也很少」）
  *     + `mcp_manager_switch`。启停在面板上都有同款，注入段也写着当前开着哪些。
  *     MCP 那条**也关**（用户指定的五条清单里没有它）：代价是这个域出厂没有一条可见工具 ——
- *     模型要停 / 启服务器，得先用 `tool_manager_tools` 把它打开，多一次往返。默认清单以
+ *     模型要停 / 启服务器，得先用 `tool_manager_switch` 把它打开，多一次往返。默认清单以
  *     用户点名的五条为准，不为了"每域留一条腿"自行加回。
  *   · **建档两条** —— `scene_manager_save`（场景记录）+ `scene_manager_archive`（档案段：
  *     进入时开哪些 MCP / 技能 / 人设）。配置本体在面板上改；档案的勾选集机器自己算得出来
@@ -138,7 +138,7 @@ export interface ToolTableSettings {
  * 技能 / 人设"是常问的，但它**低频于"读现状 + 拨开关 + 建改定义"**那批，而且面板每个域都有
  * 删除入口 —— 默认关、要用时在「兼容」页勾上（与其余默认关停的工具同一条纪律，不额外付 token）。
  *
- * 关掉的这些**模型自己也能打开**：`tool_manager_tools`（每轮常驻的那一条）能按对话
+ * 关掉的这些**模型自己也能打开**：`tool_manager_switch`（每轮常驻的那一条）能按对话
  * 打开任意一条被关掉的工具，列清单时给出名字、一句话用途与 ≈token。这条工具不在
  * 这份名单里 —— 它是唯一的回头路，自己关掉自己的话就再也开不回来了。
  *
@@ -171,7 +171,7 @@ export const DEFAULT_HIDDEN_TOOLS: readonly string[] = Object.freeze([
   'subagent_manager_save',
   'prompt_manager_list',
   'prompt_manager_apply',
-  'plugin_manager_remove',
+  'plugin_manager_trash',
   // 自主笔记：默认藏着（它是权限，不是便利），此后**跟随总开关开合** —— 开着强制可见、
   // 关着强制隐藏，两边都不能手动改（见 index.ts 的 proactiveMemoryGlobalOn 那条过滤链）。
   // 放在这份名单而不是另建一张表：

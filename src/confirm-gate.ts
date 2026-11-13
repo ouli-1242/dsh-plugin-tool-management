@@ -3,7 +3,7 @@
 // 与 `index.ts` 的 `CONFIRM_LABELS` 分工：那张表回答"这条工具要不要门"，这里回答"这一次
 // 要不要门"。必须分开，因为同一个工具不同 action 的危险度差得远：
 //
-//   · `*_remove` 的 `list` 是读、`restore` 是恢复，只有 `trash` 是删除；
+//   · `plugin_manager_trash` 的 `list` 是读、`restore` 是恢复，只有 `trash` 是删除；
 //   · `mcp_manager_switch` 的 `restart` 是服务器挂掉时的恢复路径（场景锁都为它开口），
 //     `stop` 才是机器级停机；
 //   · `prompt_manager_apply` 的 `apply: false` 是撤销，不是改写。
@@ -25,13 +25,13 @@ export type ConfirmScopeMode = 'global' | 'session' | 'workspace'
  * 不在这张表里的工具仍走 `CONFIRM_LABELS` 的既有分支（无条件问，或按设置开关问）。
  */
 export const ARG_CONDITIONAL_CONFIRM_TOOLS: ReadonlySet<string> = new Set([
-  'plugin_manager_remove',
+  'plugin_manager_trash',
   'prompt_manager_apply',
   'mcp_manager_switch',
   'memory_manager_switch',
   'skill_manager_switch',
   'subagent_manager_switch',
-  'tool_manager_tools',
+  'tool_manager_switch',
 ])
 
 /** 取一个必填字符串参数；不是非空字符串就返回空串。 */
@@ -47,7 +47,7 @@ function machineWide(args: Record<string, unknown>, mode: ConfirmScopeMode): boo
 /**
  * 删除类工具的域 → 卡上回显的名词。
  *
- * 删除是一条**跨域**工具（`plugin_manager_remove`），所以名词由 `domain` 参数决定，
+ * 删除是一条**跨域**工具（`plugin_manager_trash`），所以名词由 `domain` 参数决定，
  * 不由工具名决定 —— 五个域合进一条之后，工具名不再携带是删什么。
  *
  * 域不认识（或没给）时返回 undefined：那种调用注定失败，问了也是一次无效审批。
@@ -81,10 +81,10 @@ export function isMustAskConfirm(
 ): boolean {
   const args = (rawArgs !== null && typeof rawArgs === 'object' ? rawArgs : {}) as Record<string, unknown>
   const action = text(args.action)
-  if (name.endsWith('_remove')) {
+  if (name === 'plugin_manager_trash') {
     return action === 'trash' && REMOVE_SUBJECT[text(args.domain)] !== undefined
   }
-  if (name === 'tool_manager_tools') {
+  if (name === 'tool_manager_switch') {
     if (action === 'repair') return true
     // 机器级停用 = 把工具从所有对话里拿走（"移除工具"）；启用是加回来，可跳过。
     if (action === 'disable' && machineWide(args, mode)) return text(args.tools) !== '' || Array.isArray(args.tools)
@@ -101,7 +101,7 @@ export function isMustAskConfirm(
  * @param mode 当前隔离粒度；`global` 下所有开关写入都是机器级。
  * @returns 确认卡的理由；`null` = 不拦，调用方直接 `next()`。
  * @remarks
- * 只有 `remove` 的 `trash`、`mcp_switch` 的 `stop` 与全局 `on`/`off`、`prompt_apply` 的
+ * 只有 `plugin_manager_trash` 的 `trash`、`mcp_switch` 的 `stop` 与全局 `on`/`off`、`prompt_apply` 的
  * 正向应用、以及三个 `_switch` 的机器级写入会返回理由。其余 action（`list`/`restore`/
  * `restart`/`apply:false`/会话级开关）一律放行。
  */
@@ -113,7 +113,7 @@ export function argConditionalConfirmReason(
   const args = (rawArgs !== null && typeof rawArgs === 'object' ? rawArgs : {}) as Record<string, unknown>
   const action = text(args.action)
 
-  if (name.endsWith('_remove')) {
+  if (name === 'plugin_manager_trash') {
     // 只有 trash 是删除。list 是读、restore 是恢复（与 mcp 的 restart 同一档，不该拦）。
     if (action !== 'trash') return null
     const id = text(args.id)
@@ -170,7 +170,7 @@ export function argConditionalConfirmReason(
     return `${args.prefer ? 'Make' : 'Stop preferring'} the copy of ${label}「${key}」 win its name collision, machine-wide.`
   }
 
-  if (name === 'tool_manager_tools') {
+  if (name === 'tool_manager_switch') {
     // 会话层自开不弹（只动管着这个对话的那一层，随时可退）；隔离关掉时那一层就是全局，
     // 动的是所有对话 —— 与三个 `_switch` 在全局粒度下的口径一致，要问。
     // 修复类动作要问：它会把**已损坏的侧车改名留存**、按空表继续 —— 那是一次不可逆的

@@ -112,11 +112,11 @@ dsh plugin --profile desktop add dsh-plugin-tool-management@latest  # 桌面版
 
 六个操作域共 **23 条模型工具**：列清单、读正文、新建、修改、删除、启停、进出场景、应用提示词、派子智能体。其中 22 条可在工具表逐条开关，`memory_manager_note` 跟随自主记忆总开关。
 
-- **默认只发 5 条**（`tool_manager_tools` / `memory_manager_get` / `memory_manager_remember` / `skill_manager_read` / `subagent_manager_run`），17 条手动开关默认关着；`memory_manager_note` 另跟随总开关，关闭时 5 条、打开时 6 条。关掉不是藏起来，是**根本没进 schema**——模型看不到，也调不到。
+- **默认只发 5 条**（`tool_manager_switch` / `memory_manager_get` / `memory_manager_remember` / `skill_manager_read` / `subagent_manager_run`），17 条手动开关默认关着；`memory_manager_note` 另跟随总开关，关闭时 5 条、打开时 6 条。关掉不是藏起来，是**根本没进 schema**——模型看不到，也调不到。
 - **按层生效**：模型默认只改当前这一层，回执会说清写的是哪一层；带 `scope: "global"` 才动全局。
 - **写操作有确认卡**：停机、删除、开关落到机器级等都会先问一句；恢复动作（重启 / 还原 / 取消应用）不拦。会话处于「完全权限」审批策略（`never`）时不会弹卡，需要确认的写操作会被宿主直接拒绝；可恢复动作照常放行。
 - **逐条可开关**：兼容页的「模型工具表」按层调整，22 条全开约 6k token/轮；可以按任务存成不同方案，跟场景一起切。
-- **关掉的模型自己能开**：常驻的那条 `tool_manager_tools` 能列出这个对话关着的工具（名字 + 用途 + ≈token）并按需打开 —— 用户说「进入某个场景」而场景工具恰好关着时，模型有路走，不用回头找用户。
+- **关掉的模型自己能开**：常驻的那条 `tool_manager_switch` 能列出这个对话关着的工具（名字 + 用途 + ≈token）并按需打开 —— 用户说「进入某个场景」而场景工具恰好关着时，模型有路走，不用回头找用户。
 
 ## 兼容页
 

@@ -10,7 +10,7 @@
 // `tools/table.ts` 会把工具表那一层的依赖链（注入契约、工具依赖）接回来 —— 运行时环
 // 是这么接上的。与 `trash-id.ts` 同一层：根目录的跨层共享叶子。
 //
-// ⚠️ 删除族是**语义合并**（五条并成一条 `plugin_manager_remove`），与别的「一对一改名」
+// ⚠️ 删除族是**语义合并**（五条并成一条 `plugin_manager_trash`），与别的「一对一改名」
 // 不是一回事：五条出厂都是关着的，所以「任意一条关着 ⇒ 合成的这条关着」正好保住了
 // 出厂口径；只开过其中一条的用户会看到合成的那条仍是关着的 —— 面板上一键就能开，
 // 比原来分五条开省事。
@@ -44,13 +44,15 @@ export const LEGACY_TOOL_NAME_MAP: Readonly<Record<string, string>> = Object.fre
   memory_switch: 'memory_manager_switch',
   skill_manager_set_enabled: 'skill_manager_switch',
   subagent_manager_set_enabled: 'subagent_manager_switch',
-  // 删除族：五个域各一条 → 合成一条 `plugin_manager_remove`（**多对一**）。
-  // 翻译后按新名去重，五条旧名落在同一条上。
-  memory_manager_remove: 'plugin_manager_remove',
-  skill_manager_remove: 'plugin_manager_remove',
-  subagent_manager_remove: 'plugin_manager_remove',
-  scene_manager_remove: 'plugin_manager_remove',
-  prompt_manager_remove: 'plugin_manager_remove',
+  // 删除族：五个域各一条 → 合成一条 `plugin_manager_trash`（**多对一**）。
+  // 翻译后按新名去重，五条旧名落在同一条上。`plugin_manager_remove` 是合并后的第二代名，
+  // 现在也迁到 `plugin_manager_trash`。
+  memory_manager_remove: 'plugin_manager_trash',
+  skill_manager_remove: 'plugin_manager_trash',
+  subagent_manager_remove: 'plugin_manager_trash',
+  scene_manager_remove: 'plugin_manager_trash',
+  prompt_manager_remove: 'plugin_manager_trash',
+  plugin_manager_remove: 'plugin_manager_trash',
   // 自主笔记：早期分开注册的四条，以及上一版合并后的 `memory_manager_auto`，都迁到
   // 合并后的那条工具；第二代叫 `memory_note`，现在统一到 `memory_manager_note`。
   // 盘上的 `tool-table.json` / 场景快照可能留着旧名；任意一条被关过

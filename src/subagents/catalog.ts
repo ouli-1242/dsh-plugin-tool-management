@@ -97,7 +97,7 @@ export function renderSubagentCatalog(
     out.push('', listToolVisible
       ? `(${hidden} more not listed — see them with \`subagent_manager_list\`.)`
       : controlVisible
-        ? `(${hidden} more not listed — \`subagent_manager_list\` is disabled in this session; enable it with \`tool_manager_tools\` to see them.)`
+        ? `(${hidden} more not listed — \`subagent_manager_list\` is disabled in this session; enable it with \`tool_manager_switch\` to see them.)`
         : `(${hidden} more not listed — \`subagent_manager_list\` is disabled in this session; ask the user to enable it.)`)
   }
   return out.join('\n')
@@ -115,7 +115,7 @@ export interface SubagentCatalogDeps {
    */
   listToolVisible?: (agent?: unknown) => boolean
   /**
-   * 控制面工具（`tool_manager_tools`）在这个 agent 手里吗：截断提示中间档（指自举）的前提。
+   * 控制面工具（`tool_manager_switch`）在这个 agent 手里吗：截断提示中间档（指自举）的前提。
    * 与 `listToolVisible` 同一份判据；缺席按在手里算。
    */
   controlVisible?: (agent?: unknown) => boolean

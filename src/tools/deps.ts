@@ -85,7 +85,7 @@ export function toolOrNeutral(
  * 定义在这一层而不是 `tools/control.ts`：回执与报错常要问「模型能不能自己打开某条工具」，
  * 那问的就是这条的名字 —— 两处各写一个字面量，改名时就分叉了。
  */
-export const CONTROL_TOOL_NAME = 'tool_manager_tools'
+export const CONTROL_TOOL_NAME = 'tool_manager_switch'
 
 /**
  * 一条工具看不见时，模型自己还能走的路。
@@ -138,7 +138,7 @@ export function toolAccessSentence(deps: ToolVisibilityJudge, fixer: string, age
   const route = toolAccessRoute(deps, fixer, agent)
   if (route === 'direct') return 'use ' + fixer
   if (route === 'via-control') {
-    return 'enable ' + fixer + ' with tool_manager_tools (action="enable", tools:["' + fixer + '"]), then use it'
+    return 'enable ' + fixer + ' with tool_manager_switch (action="enable", tools:["' + fixer + '"]), then use it'
   }
   return fallback
 }

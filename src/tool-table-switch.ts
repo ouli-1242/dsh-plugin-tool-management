@@ -434,7 +434,7 @@ export function createToolTableSwitch(deps: ToolTableSwitchDeps): ToolTableSwitc
         .filter((t) => t && typeof t.name === 'string' && t.name !== '')
         .map((t) => ({ name: String(t.name), hidden: t.hidden === true }))
         // 只收**已注册**的名字：写进来的陌生名字在下一次 restrict 时会让官方抛错。
-        // 锁定的两条方向都不收：模型侧 `tool_manager_tools` 也改不动自主记忆工具。
+        // 锁定的两条方向都不收：模型侧 `tool_manager_switch` 也改不动自主记忆工具。
         .filter((t) => toolTableSizes.has(t.name) && !forced.has(t.name) && !forcedOff.has(t.name))
       if (toggles.length === 0) {
         const names = (args.toggle as any[]).map((t: any) => String(t && t.name))

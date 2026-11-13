@@ -1,4 +1,4 @@
-// 删除 / 回收站族的 model 工具：**一条** `plugin_manager_remove`（五个域共用）。
+// 删除 / 回收站族的 model 工具：**一条** `plugin_manager_trash`（五个域共用）。
 //
 // 为什么要有这一族：此前模型**只能停用、不能删除** —— "把这条过时的记忆删掉"这类要求手里
 // 没有出口，模型会去调 `*_switch(enabled:false)` 然后回一句"已停用"，用户以为删了。面板上
@@ -213,7 +213,7 @@ function sceneExitNote(deps: ToolDomainDeps, agent: unknown, domain: string | un
     'You are still in it — leaving it is a separate action, and the scene tools are off here.')
 }
 
-/** 注册删除类工具：五个域共用一条 `plugin_manager_remove`（按 `domain` 分派）。 */
+/** 注册删除类工具：五个域共用一条 `plugin_manager_trash`（按 `domain` 分派）。 */
 export function buildRemoveTools(deps: RemoveToolDeps): void {
   const { defineTool, register } = deps
   const mem = deps.memoryOps
@@ -361,7 +361,7 @@ export function buildRemoveTools(deps: RemoveToolDeps): void {
   }
 
   register(defineTool({
-    name: 'plugin_manager_remove',
+    name: 'plugin_manager_trash',
     description: removeDescription(),
     parameters: {
       action: { type: 'string', required: true, enum: ['trash', 'restore', 'list'], description: ACTION_DESC },

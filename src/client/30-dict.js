@@ -774,10 +774,10 @@
         "compat.tools.about.subagent_manager_save": "新建/修改人设",
         "compat.tools.about.prompt_manager_list": "列出全局提示词",
         "compat.tools.about.prompt_manager_apply": "应用全局提示词",
-        "compat.tools.about.tool_manager_tools": "本对话的工具开关",
+        "compat.tools.about.tool_manager_switch": "本对话的工具开关",
         // 五个域的删除合进一条之后，行内只能给一个中性对象词（"条目"）；
         // 具体是哪一类写在悬停那一档的 domain 里。
-        "compat.tools.about.plugin_manager_remove": "删除/恢复条目",
+        "compat.tools.about.plugin_manager_trash": "删除/恢复条目",
         "compat.tools.hover.memory_manager_get": "用户记忆与 Agent 笔记的读取入口。不给参数 = 清单（用户记忆带场景、启停与一句话描述，笔记带层、状态与是否注入）；给 id = 正文（用户记忆 id 形如 <场景>/<名字>，笔记 id 带 note: 前缀；不带前缀时先找用户记忆，再找笔记）；给 query = 两边一起按词过滤。默认只列会注入的条目，all=true 连停用、场景未启用、归档的一起列。只看不改。",
         "compat.tools.hover.memory_manager_switch": "只拨索引里的开关，.md 文件一个字不动，随时能拨回来。停用的记忆不再进上下文，等于把注入预算让给别人 —— 想省 token 优先用它，而不是删。",
         "compat.tools.hover.memory_manager_remember": "用户明确要求记住时用。scope=scene 写进某个场景（只有该场景开着才注入）；scope=global 每个项目都注入；scope=workspace 写成本项目的用户记忆（用户资产，不需要自主记忆开着）。没说范围就先问用户，别猜。给 id 则更新已有记忆或笔记，而不是新建。记忆会进之后每一轮请求，只记从代码、配置、git 推不出来的事；同名的第二条会替换第一条的正文。",
@@ -799,10 +799,10 @@
         "compat.tools.hover.subagent_manager_save": "新建人设，或改掉已存在的那份 —— 回执会说清走了哪条。可改名字、描述、正文（正文会作为子代理的系统提示词）与输出要求，没传的字段保持原样；改名会连带改场景与档案里的绑定。provider / 模型 / 工具限制只留给面板（模型看不到自己改对了没有，所以不给）。描述决定模型什么时候会选它。",
         "compat.tools.hover.prompt_manager_list": "列出全局提示词预设（写进 AGENTS.md 的那一类）与摘要，标明当前生效的是哪一份 —— 同时只有一份生效。要换用哪份之前先用它确认名字。快捷提示词不在这个域里：那是用户自己在输入框里点出来的一段话，不进上下文，模型这边没有可做的动作。",
         "compat.tools.hover.prompt_manager_apply": "把某份预设应用到用户级 AGENTS.md，之后的对话立刻按它走。一次只有一份在生效，换一份就是替换上一份。",
-        "compat.tools.hover.tool_manager_tools": "模型自己开关**本对话**能用的插件工具。action=list 列出这个对话当前关着的那些（每条一句话用途 + 每轮 ≈token）；action=enable / disable 把它们打开或关掉，只影响这个对话，从下一次请求起生效。要在对话里说「进入某个场景」而场景工具恰好是关着的时候，就靠它。action=repair 修坏掉的侧车（记忆索引 / 作用域侧车 / MCP 停用表 / 模型工具表）—— 那一步会把损坏的文件改名留存、按空表（工具表按出厂名单）继续，所以会先问一次。",
-        // 删除族：五个域合进一条 `plugin_manager_remove`，悬停要一次说清 domain 的取值、
+        "compat.tools.hover.tool_manager_switch": "模型自己开关**本对话**能用的插件工具。action=list 列出这个对话当前关着的那些（每条一句话用途 + 每轮 ≈token）；action=enable / disable 把它们打开或关掉，只影响这个对话，从下一次请求起生效。要在对话里说「进入某个场景」而场景工具恰好是关着的时候，就靠它。action=repair 修坏掉的侧车（记忆索引 / 作用域侧车 / MCP 停用表 / 模型工具表）—— 那一步会把损坏的文件改名留存、按空表（工具表按出厂名单）继续，所以会先问一次。",
+        // 删除族：五个域合进一条 `plugin_manager_trash`，悬停要一次说清 domain 的取值、
         // 各域 id 的形状，以及"只是不想注入就用 switch 停用"这条更省事的替代路径。
-        "compat.tools.hover.plugin_manager_remove": "把一条移进回收站、从回收站恢复，或列出回收站。domain 决定动的是哪一类：memory（id 是 <场景>/<名字>）、skill、persona、preset（用它的 id）、scene。删除可恢复 —— 只想让它别再注入或别再进目录，用对应的 switch 停用即可，不必删；删技能时可传 root 指定来源。永久删除在各自那一页的回收站里做。",
+        "compat.tools.hover.plugin_manager_trash": "把一条移进回收站、从回收站恢复，或列出回收站。domain 决定动的是哪一类：memory（id 是 <场景>/<名字>）、skill、persona、preset（用它的 id）、scene。删除可恢复 —— 只想让它别再注入或别再进目录，用对应的 switch 停用即可，不必删；删技能时可传 root 指定来源。永久删除在各自那一页的回收站里做。",
         "compat.live.title": "注入实况", "compat.live.hint": "模型实际看到的内容（只读）",
         "compat.live.never": "这段对话还没投过", "compat.live.delivered": "本段对话已投递 {count} 条 · 最近 {time}",
         "compat.live.copy": "复制全文", "compat.live.copied": "已复制", "compat.live.noAgent": "还没有会话：发一条消息后再来看",
@@ -1854,10 +1854,10 @@
         "compat.tools.about.subagent_manager_save": "Create/update a persona",
         "compat.tools.about.prompt_manager_list": "List global prompts",
         "compat.tools.about.prompt_manager_apply": "Apply a global prompt",
-        "compat.tools.about.tool_manager_tools": "This conversation's tool switches",
+        "compat.tools.about.tool_manager_switch": "This conversation's tool switches",
         // One merged delete tool for all five domains: the inline line needs a neutral
         // object noun, the domain values live in the hover tier.
-        "compat.tools.about.plugin_manager_remove": "Delete/restore an item",
+        "compat.tools.about.plugin_manager_trash": "Delete/restore an item",
         "compat.tools.hover.memory_manager_get": "The read side for user memories and agent notes. No arguments → catalogs (memories with scene, on/off state and one-line description; notes with layer, status and whether they inject). An id → the full body (user memory ids look like <scene>/<name>; note ids carry the note: prefix, and an unprefixed id is looked up as a memory first, then a note). A query → both catalogs filtered by words. Only injecting entries by default; all=true adds disabled, inactive-scene and archived ones. Read-only.",
         "compat.tools.hover.memory_manager_switch": "Flips the index switch only — the .md file is untouched and it is reversible. A disabled memory stops being injected, which frees byte budget for the others; prefer this over deleting when you want to spend fewer tokens.",
         "compat.tools.hover.memory_manager_remember": "Use when the user explicitly asks you to keep something. scope=scene writes into a scene (injected only when that scene is on); scope=global injects in every project; scope=workspace stores a user memory for this workspace (a user asset, no autonomous memory needed). If the user did not say where, ask — do not guess. Pass id to update an existing memory or note instead of creating one. Memories enter every later request, so record only what cannot be re-derived from code, config or git; a second entry with the same name replaces the first body.",
@@ -1879,10 +1879,10 @@
         "compat.tools.hover.subagent_manager_save": "Creates a persona, or updates the existing one — the receipt says which. You can set the name, description, body (the body becomes the subagent's system prompt) and output contract; omitted fields keep their current values, and a rename makes scene and archive bindings follow. Provider, model and tool limits stay in the panel (the model cannot tell whether it got them right, so it is not offered them). The description decides when the model picks it.",
         "compat.tools.hover.prompt_manager_list": "Lists the global prompt presets (the ones written into AGENTS.md) with their summaries and marks the one currently in effect — only one is active at a time. Use it to confirm the name before switching. Quick prompts are not this domain: the user picks those in the composer, they never enter the context, and there is nothing for the model to do with them.",
         "compat.tools.hover.prompt_manager_apply": "Applies a preset to the user-level AGENTS.md; later conversations follow it immediately. Only one preset is in effect, so applying another replaces it.",
-        "compat.tools.hover.tool_manager_tools": "The model switches which of this plugin's tools THIS conversation can use. action=list lists the ones that are off here (one line of purpose each, plus their per-turn token cost); action=enable / disable turns them on or off, affecting this conversation only and taking effect from the next request. This is what unblocks \"switch to that scene\" when the scene tools happen to be off. action=repair fixes a broken sidecar (memory index / scope sidecar / MCP disabled-tools table / model tool table) — that renames the damaged file aside and continues with an empty table (the factory list, for the tool table), so it asks first.",
+        "compat.tools.hover.tool_manager_switch": "The model switches which of this plugin's tools THIS conversation can use. action=list lists the ones that are off here (one line of purpose each, plus their per-turn token cost); action=enable / disable turns them on or off, affecting this conversation only and taking effect from the next request. This is what unblocks \"switch to that scene\" when the scene tools happen to be off. action=repair fixes a broken sidecar (memory index / scope sidecar / MCP disabled-tools table / model tool table) — that renames the damaged file aside and continues with an empty table (the factory list, for the tool table), so it asks first.",
         // One merged delete tool for all five domains: the hover has to carry the domain
         // values, the per-domain id shapes, and the cheaper alternative (switch off).
-        "compat.tools.hover.plugin_manager_remove": "Moves one item to the trash, restores one from the trash, or lists the trash. domain says which kind: memory (id is <scene>/<name>), skill, persona, preset (use its id) or scene. Deleting is reversible — to just stop it being injected or leaving the catalog, disable it with the matching switch instead; pass root to pick the source when trashing a skill. Emptying the trash is a panel action on that domain's page.",
+        "compat.tools.hover.plugin_manager_trash": "Moves one item to the trash, restores one from the trash, or lists the trash. domain says which kind: memory (id is <scene>/<name>), skill, persona, preset (use its id) or scene. Deleting is reversible — to just stop it being injected or leaving the catalog, disable it with the matching switch instead; pass root to pick the source when trashing a skill. Emptying the trash is a panel action on that domain's page.",
         "compat.live.title": "Live injection", "compat.live.hint": "What the model actually sees (read-only)",
         "compat.live.never": "nothing delivered in this conversation yet", "compat.live.delivered": "{count} delivered in this conversation · last {time}",
         "compat.live.copy": "Copy all", "compat.live.copied": "Copied", "compat.live.noAgent": "No session yet — send a message first",

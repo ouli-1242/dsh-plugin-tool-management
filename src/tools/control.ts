@@ -1,4 +1,4 @@
-// 控制面工具 `tool_manager_tools`：模型自己看得到哪些工具、能不能自己打开。
+// 控制面工具 `tool_manager_switch`：模型自己看得到哪些工具、能不能自己打开。
 //
 // 为什么要有它：插件出厂只发 6 条工具（`src/tools/table.ts` 的 `DEFAULT_HIDDEN_TOOLS`
 // 关掉 18 条）。场景那一族**四条全关**，而场景目录注入只列**当前已启用的**场景 ——
@@ -74,10 +74,10 @@ function toolLine(name: string, summary: string, bytes: number): string {
 }
 
 /** 这条工具自己的名字（自己不可被关的那条判据用）。 */
-const CONTROL_TOOL_NAME = 'tool_manager_tools'
+const CONTROL_TOOL_NAME = 'tool_manager_switch'
 
 /**
- * 注册控制面工具（`tool_manager_tools`）。
+ * 注册控制面工具（`tool_manager_switch`）。
  *
  * 只做三件事：列清单、开工具、关工具。**没有第四件** ——
  * 「打开之后立刻用那条工具」的动作没有做：它要么绕过宿主的工具执行管线

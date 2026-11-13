@@ -165,7 +165,7 @@ export function renderMcpStateSection(
    */
   sessionTools: { on: readonly string[]; off: readonly string[] } = { on: [], off: [] },
   /**
-   * 控制面工具（`tool_manager_tools`）在这个 agent 手里吗：截断尾句的中间档出口。
+   * 控制面工具（`tool_manager_switch`）在这个 agent 手里吗：截断尾句的中间档出口。
    * 与 `listToolVisible` 同一判据来源（按 agent）；缺席按在手里算 ——
    * 它出厂常驻，且模型自己关不掉它。
    */
@@ -269,7 +269,7 @@ export function renderMcpStateSection(
     out.push('', listToolVisible
       ? `(${hidden} more not listed — see them with \`mcp_manager_list\`.)`
       : controlVisible
-        ? `(${hidden} more not listed — \`mcp_manager_list\` is disabled in this session; enable it with \`tool_manager_tools\` to see them.)`
+        ? `(${hidden} more not listed — \`mcp_manager_list\` is disabled in this session; enable it with \`tool_manager_switch\` to see them.)`
         : `(${hidden} more not listed — \`mcp_manager_list\` is disabled in this session; ask the user to enable it.)`)
   }
   return out.join('\n')
@@ -288,7 +288,7 @@ export interface McpStateDeps {
    */
   listToolVisible?: (agent?: unknown) => boolean
   /**
-   * 控制面工具（`tool_manager_tools`）在这个 agent 手里吗：尾句中间档（指自举）的前提。
+   * 控制面工具（`tool_manager_switch`）在这个 agent 手里吗：尾句中间档（指自举）的前提。
    * 与 `listToolVisible` 同一份判据；缺席按在手里算。
    */
   controlVisible?: (agent?: unknown) => boolean

@@ -130,7 +130,7 @@ export interface McpManagerDeps {
    * 两个目录同一份 —— 见 `skills/catalog.ts` 里 `listToolVisible` 的注释。缺席时按"在手里"算。
    */
   listToolVisible?(agent?: unknown): boolean
-  /** 控制面工具（`tool_manager_tools`）在这个 agent 手里吗：尾句中间档（指自举）的前提。同一份判据；缺席按"在手里"算。 */
+  /** 控制面工具（`tool_manager_switch`）在这个 agent 手里吗：尾句中间档（指自举）的前提。同一份判据；缺席按"在手里"算。 */
   controlVisible?(agent?: unknown): boolean
   /** 状态段条数上限的设置来源（`catalogCaps.mcp`；缺席 = 出厂值 50）。 */
   catalogCaps?(): CatalogCaps

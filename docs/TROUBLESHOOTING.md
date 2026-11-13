@@ -245,7 +245,7 @@ MCP 停用表不可读（<原因>）：所有 mcp__* 工具已被拒绝调用；
 | `mcp-disabled-tools.json` | 所有 `mcp__*` 被拒（见上一节） | MCP 页「重置停用表」 |
 | `memories-index.json` | 记忆索引不可信 | 见下方「记忆索引隔离」 |
 | `memories-index.json.quarantine.json` | 这是**隔离标记**，不是坏文件；有它 = 记忆写入被拒 | 场景页「一键修复」会自动清除（见下方「记忆索引隔离」） |
-| `tool-table.json` | 模型工具表回落到默认名单，保存被拒 | 兼容页工具表那块出现「修复工具表文件」：确认后把损坏文件改名为 `.corrupt-<时间戳>` 留存，工具表按出厂名单继续；模型也可以调 `tool_manager_tools` 的 `repair`（`target: "tool-table"`） |
+| `tool-table.json` | 模型工具表回落到默认名单，保存被拒 | 兼容页工具表那块出现「修复工具表文件」：确认后把损坏文件改名为 `.corrupt-<时间戳>` 留存，工具表按出厂名单继续；模型也可以调 `tool_manager_switch` 的 `repair`（`target: "tool-table"`） |
 | `scope-overrides.json` | 会话 / 工作区覆盖写入失败；读侧回落到全局 | 作用域条出现「修复作用域文件」：确认后把损坏文件改名为 `.corrupt-<时间戳>` 留存，覆盖表按空表继续 |
 | `scope-intent.json` | 全局意图写入失败；读侧等于「还没有意见」 | 同上；修复后下一次对账会从运行态反推意图 |
 | `inject-settings.json` 等四个界面设置 | 该页设置回默认 | 删掉那一个，重启 |

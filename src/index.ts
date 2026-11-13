@@ -2243,7 +2243,7 @@ export default {
       // 与 `how` 行、MCP 回执同一份 `toolVisibleFor`，不再只看全局开关。
       listToolVisible: (agent) => toolVisibleFor('subagent_manager_list', agent),
       // 截断提示的中间档：清单工具不在手、但控制面工具在时，指模型自己开（同一份判据）。
-      controlVisible: (agent) => toolVisibleFor('tool_manager_tools', agent),
+      controlVisible: (agent) => toolVisibleFor('tool_manager_switch', agent),
       // 会话层：四层并值（覆盖 → 场景层绑定 → 基线）。本会话开的**能救回**
       // 场景绑定的排除项；没话说时目录自己落到全局口径（场景绑定 ∩ 全局启停）。
       flagFor: (agent) => flagResolverOfAgent(agent, 'subagents'),
@@ -2267,7 +2267,7 @@ export default {
       // 与子智能体目录同一份判据：只看全局开关时，人设用
       // `toolsDeny` 砍掉 `skill_manager_list` 之后，技能目录尾句照样点名一条它手里没有的工具。
       listToolVisible: (agent) => toolVisibleFor('skill_manager_list', agent),
-      controlVisible: (agent) => toolVisibleFor('tool_manager_tools', agent),
+      controlVisible: (agent) => toolVisibleFor('tool_manager_switch', agent),
       // 会话层：两格 —— 技能（覆盖 → 场景层 → 基线 + 全局意图）与来源（同一条）。
       //
       // 两格**总是给**：策略表 / 来源状态是机器级的，租约期间读到的是运行态。不给会话层
@@ -3827,14 +3827,14 @@ export default {
       // 模型侧的 toggle，而开关关着时盘上名单很可能早就没有这条了。
       pluginHiddenTools: () => [...withProactiveTool(toolTableHidden())],
       // 「这个名字是不是自家工具」：注册漏斗记下的全集（`selfToolNames`，注册成功才记）——
-      // 注册事实，不是前缀枚举（前缀表会漏掉控制面工具 `tool_manager_tools`）。
+      // 注册事实，不是前缀枚举（前缀表会漏掉控制面工具 `tool_manager_switch`）。
       isPluginToolName: (name: string) => selfToolNames.has(name),
       // 有官方等价物时逐 agent 让位（见上面 CARRIER_DUPLICATES 的注释）。
       carrierHiddenTools: carrierHiddenToolsFor,
       // 状态段尾句那句「用 `mcp_manager_list` 查」的前提：与技能 / 子智能体两个目录同一份判据
       // 。
       listToolVisible: (agent: unknown) => toolVisibleFor('mcp_manager_list', agent),
-      controlVisible: (agent: unknown) => toolVisibleFor('tool_manager_tools', agent),
+      controlVisible: (agent: unknown) => toolVisibleFor('tool_manager_switch', agent),
       // 状态段条数上限：与技能 / 子智能体两个目录同一份设置来源（`catalogCaps.mcp`）。
       catalogCaps: () => injectSettingsSync().catalogCaps,
       // 会话层：两半各管一头 ——
@@ -6544,7 +6544,7 @@ export default {
       },
       failures: subagentFailures,
     })
-    // 删除 / 回收站族（tools/remove.ts）：**一条** `plugin_manager_remove`（五个域共用）。
+    // 删除 / 回收站族（tools/remove.ts）：**一条** `plugin_manager_trash`（五个域共用）。
     // 此前模型只能停用、不能删除。删除一律进回收站（可恢复）；**不做永久删除**（低频且
     // 不可恢复，留给面板）。`sceneRemove` 传 handlers 里那份（`withAgentsMdSync` 包过），
     // 与 `sceneActivate` 同一条纪律：直调 `memoriesService.ops` 会静默漏掉 AGENTS.md 那一步。
@@ -6640,10 +6640,10 @@ export default {
         // 删除与「应用提示词」原先只有描述里的 consent 句。它们动的都是磁盘上那一份：
         // 删除进回收站可恢复，应用改写的是全局 AGENTS.md 基线 —— 与上面几条同一档，
         // 门禁不该比"往 hub 里写一个技能文件"更松。
-        // 五个域合进一条 `plugin_manager_remove` 之后，标签也只能是一条：卡上真正的
+        // 五个域合进一条 `plugin_manager_trash` 之后，标签也只能是一条：卡上真正的
         // 标题由 `confirm-gate.ts` 按 `domain` 生成（"删除记忆「…」"），这里的标签只当
         // 门禁标记与 bypass 日志用。
-        plugin_manager_remove: '「删除条目」',
+        plugin_manager_trash: '「删除条目」',
         prompt_manager_apply: '「应用提示词预设」',
         // 四条 switch 只在**机器级**写入时问一次（判据在 `confirm-gate.ts`）。
         // 默认写本会话，爆炸半径只有一个对话 —— 给默认路径挂卡是纯摩擦。
@@ -6653,7 +6653,7 @@ export default {
         subagent_manager_switch: '「人设开关」',
         // 控制面工具：开关工具表**默认不问**（只动管着这个对话的那一层，随时可退），
         // 只有机器级那一档与修复类动作问（判据在 confirm-gate.ts）。
-        tool_manager_tools: '「插件工具表」',
+        tool_manager_switch: '「插件工具表」',
         // 自主记忆新增**不在这里**：learn 只写一条候选，候选不进上下文；确认发生在记忆页。
         // 把它挂成确认卡会让每次学习都打断对话，而卡片又只有允许/拒绝、没有输入框。
       }
@@ -6939,7 +6939,7 @@ export default {
           try {
             // unknown 必须先于会话 verdict：本会话显式开着也不能越过“停用表读不出来”。
             if (isMcpTool && mcp.disabledToolsState() === 'unknown') {
-              return 'the MCP disabled-tools table is unreadable: every MCP tool is refused for now — repair it with tool_manager_tools (action="repair", target="mcp-disabled")'
+              return 'the MCP disabled-tools table is unreadable: every MCP tool is refused for now — repair it with tool_manager_switch (action="repair", target="mcp-disabled")'
             }
             // 会话层的判定：它有两个方向 —— `deny` 是"这个对话里关掉了"
             // `allow` 是"这个对话里显式开着"，后者要能**越过全局停用表**（逐工具开关按会话
@@ -6954,23 +6954,23 @@ export default {
               return route === 'direct'
                 ? 'this tool has been switched off on the MCP page (mcp_manager_switch can turn it back on)'
                 : route === 'via-control'
-                  ? 'this tool has been switched off on the MCP page — enable mcp_manager_switch with tool_manager_tools (action="enable", tools:["mcp_manager_switch"]) and turn it back on there'
+                  ? 'this tool has been switched off on the MCP page — enable mcp_manager_switch with tool_manager_switch (action="enable", tools:["mcp_manager_switch"]) and turn it back on there'
                   : 'this tool has been switched off on the MCP page (the user has to turn it back on)'
             }
             // 兼容页关掉的工具：可见性半边（restrict）正常时模型根本看不到它，走到这里只有两种
             // 可能 —— 名字是猜的，或者可见性半边没生效（那条降级会上报）。执行侧一律拦住。
             if (toolTableHiddenForSession(scopeKeyForAgent(exec && exec.agent)).has(name)) {
-              // 自主笔记那条不归工具表管：`tool_manager_tools` 主动过滤掉它、自己也被总开关
-              // 锁着两条方向。让模型照下面的提示去 `tool_manager_tools` 开它只会撞墙，
+              // 自主笔记那条不归工具表管：`tool_manager_switch` 主动过滤掉它、自己也被总开关
+              // 锁着两条方向。让模型照下面的提示去 `tool_manager_switch` 开它只会撞墙，
               // 所以这里必须改指记忆页 —— 那是唯一能改总开关的地方。
               if (name === PROACTIVE_MEMORY_TOOL) {
                 return 'this tool follows the autonomous memory master switch: turn it on in Settings → Memory (only the user can) — the tool table cannot enable it separately'
               }
-              // 模型自己有出路就别把它推给用户：它手里有控制面工具（tool_manager_tools），
+              // 模型自己有出路就别把它推给用户：它手里有控制面工具（tool_manager_switch），
               // 能把这条打开 —— 说清怎么开，比说「去面板点」有用得多。
               return toolAccessRoute(toolDeps, name, exec && exec.agent) === 'none'
                 ? 'this tool is switched off in this conversation\'s tool table (the user has to turn it back on)'
-                : 'this tool is switched off in this conversation\'s tool table — enable it with tool_manager_tools (action="enable", tools:["' + name + '"])'
+                : 'this tool is switched off in this conversation\'s tool table — enable it with tool_manager_switch (action="enable", tools:["' + name + '"])'
             }
           } catch (e) {
             // 守卫自身算不出来时，MCP 工具必须 fail-closed；其余工具保持原来的放行方向，

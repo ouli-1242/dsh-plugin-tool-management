@@ -5149,14 +5149,14 @@ test('确认门按「动作 × 作用域」判定：恢复路径不拦，机器�
   const asks = (name, args, mode = 'session') => argConditionalConfirmReason(name, args, mode) !== null
   // 删除：trash 才是删除；list 是读、restore 是恢复（与 restart 同一档，不该拦）
   // 五个域合进一条之后，删什么由 domain 决定 —— 域不认识（或没给）时那次调用注定失败
-  assert.equal(asks('plugin_manager_remove', { action: 'trash', domain: 'memory', id: 'global/x' }), true)
-  assert.equal(asks('plugin_manager_remove', { action: 'restore', domain: 'memory', id: 't1' }), false)
-  assert.equal(asks('plugin_manager_remove', { action: 'list', domain: 'skill' }), false)
+  assert.equal(asks('plugin_manager_trash', { action: 'trash', domain: 'memory', id: 'global/x' }), true)
+  assert.equal(asks('plugin_manager_trash', { action: 'restore', domain: 'memory', id: 't1' }), false)
+  assert.equal(asks('plugin_manager_trash', { action: 'list', domain: 'skill' }), false)
   // 缺 id 的删除注定失败：弹卡等于让用户批准一次做不成的操作
-  assert.equal(asks('plugin_manager_remove', { action: 'trash', domain: 'memory' }), false)
+  assert.equal(asks('plugin_manager_trash', { action: 'trash', domain: 'memory' }), false)
   // 缺 domain / 域不认识：同样做不成，问了也是一次无效审批
-  assert.equal(asks('plugin_manager_remove', { action: 'trash', id: 'global/x' }), false)
-  assert.equal(asks('plugin_manager_remove', { action: 'trash', domain: 'nope', id: 'x' }), false)
+  assert.equal(asks('plugin_manager_trash', { action: 'trash', id: 'global/x' }), false)
+  assert.equal(asks('plugin_manager_trash', { action: 'trash', domain: 'nope', id: 'x' }), false)
   // 提示词：正向应用要问，撤销（apply=false）不问
   assert.equal(asks('prompt_manager_apply', { id: 'p' }), true)
   assert.equal(asks('prompt_manager_apply', { id: 'p', apply: false }), false)
@@ -5190,16 +5190,16 @@ test('must-ask：完全权限也不许跳过的确认（删除 / 机器级停用
   assert.equal(must('memory_manager_note', { text: '统一用 pnpm' }), false, '缺省 action 也是 learn')
   assert.equal(must('memory_manager_note', { action: 'forget', note: 'x' }), false)
   // 删除：trash 是数据处置；restore / list 可跳过。
-  assert.equal(must('plugin_manager_remove', { action: 'trash', domain: 'memory', id: 'global/x' }), true)
-  assert.equal(must('plugin_manager_remove', { action: 'restore', domain: 'memory', id: 't' }), false)
-  assert.equal(must('plugin_manager_remove', { action: 'trash', domain: 'nope', id: 'x' }), false, '注定失败的调用不弹卡')
+  assert.equal(must('plugin_manager_trash', { action: 'trash', domain: 'memory', id: 'global/x' }), true)
+  assert.equal(must('plugin_manager_trash', { action: 'restore', domain: 'memory', id: 't' }), false)
+  assert.equal(must('plugin_manager_trash', { action: 'trash', domain: 'nope', id: 'x' }), false, '注定失败的调用不弹卡')
   // 机器级停用工具 = 把工具从所有对话拿走；repair 是不可逆的数据处置。会话级停用、启用可跳过。
-  assert.equal(must('tool_manager_tools', { action: 'disable', tools: ['memory_manager_get'], scope: 'global' }), true)
-  assert.equal(must('tool_manager_tools', { action: 'disable', tools: ['x'] }, 'global'), true)
-  assert.equal(must('tool_manager_tools', { action: 'disable', tools: ['x'] }), false, '会话级停用随时可退')
-  assert.equal(must('tool_manager_tools', { action: 'enable', tools: ['x'], scope: 'global' }), false, '启用是加回能力')
-  assert.equal(must('tool_manager_tools', { action: 'repair', target: 'memory-index' }), true)
-  assert.equal(must('tool_manager_tools', { action: 'list' }), false)
+  assert.equal(must('tool_manager_switch', { action: 'disable', tools: ['memory_manager_get'], scope: 'global' }), true)
+  assert.equal(must('tool_manager_switch', { action: 'disable', tools: ['x'] }, 'global'), true)
+  assert.equal(must('tool_manager_switch', { action: 'disable', tools: ['x'] }), false, '会话级停用随时可退')
+  assert.equal(must('tool_manager_switch', { action: 'enable', tools: ['x'], scope: 'global' }), false, '启用是加回能力')
+  assert.equal(must('tool_manager_switch', { action: 'repair', target: 'memory-index' }), true)
+  assert.equal(must('tool_manager_switch', { action: 'list' }), false)
   assert.equal(must('memory_manager_switch', { id: 'global/a', enabled: false, scope: 'global' }), false, '未列入 must-ask 的维持可跳过')
 })
 
@@ -5717,12 +5717,12 @@ test('折叠出口的硬不变量：三档出口各自点名正确的东西 —�
   // "点名"是行为不变量（指向模型没有的工具 = 诱导猜名字），不是文案断言：
   // 具体措辞可以改，"关着还点名"不行；反过来工具在手里时出口必须点名。
   //
-  // ⚠️ 0.22.4 把两档扩成三档（c4a28e3）：中间档（清单工具关着、但 `tool_manager_tools`
+  // ⚠️ 0.22.4 把两档扩成三档（c4a28e3）：中间档（清单工具关着、但 `tool_manager_switch`
   // 在手里）**必须**点名清单工具，否则模型只知道"有个 listing tool"却不知道要开哪条。
   // 本测试原先只断言"关着就不得出现那个名字"，于是把中间档判成违规 —— 那不是实现错，
   // 是测试没跟上三档。现在逐档断言：
   //   ① 清单工具在手      → 必须点名清单工具
-  //   ② 它关着但控制面在手 → 必须点名它（说明被停用）+ 指向 tool_manager_tools
+  //   ② 它关着但控制面在手 → 必须点名它（说明被停用）+ 指向 tool_manager_switch
   //   ③ 两者都关          → 必须点名它（说明被停用）+ 指向用户，且**不得**指向一个也没在手里的工具
   const skills = { roots: [{ key: 'g', skills: Array.from({ length: 55 }, (_, i) => ({ name: 's' + String(i).padStart(2, '0'), description: 'd', enabled: true, modelInvocable: true })) }] }
   const skillsOn = renderSkillCatalog(skills, 50, 500, true, undefined, true)
@@ -5731,22 +5731,22 @@ test('折叠出口的硬不变量：三档出口各自点名正确的东西 —�
 
   const skillsCtrl = renderSkillCatalog(skills, 50, 500, false, undefined, true)
   assert.match(skillsCtrl, /skill_manager_list/, '中间档必须点名清单工具，否则模型不知道要开哪条')
-  assert.match(skillsCtrl, /tool_manager_tools/)
+  assert.match(skillsCtrl, /tool_manager_switch/)
 
   const skillsNone = renderSkillCatalog(skills, 50, 500, false, undefined, false)
   assert.match(skillsNone, /skill_manager_list/)
   assert.match(skillsNone, /ask the user/)
-  assert.doesNotMatch(skillsNone, /tool_manager_tools/, '控制面工具也不在手里时，不得指向它')
+  assert.doesNotMatch(skillsNone, /tool_manager_switch/, '控制面工具也不在手里时，不得指向它')
 
   const subs = Array.from({ length: 52 }, (_, i) => ({ name: 'p' + i, description: 'd' }))
   assert.match(renderSubagentCatalog(subs, 50, 500, true, true), /subagent_manager_list/)
   const subsCtrl = renderSubagentCatalog(subs, 50, 500, false, true)
   assert.match(subsCtrl, /subagent_manager_list/)
-  assert.match(subsCtrl, /tool_manager_tools/)
+  assert.match(subsCtrl, /tool_manager_switch/)
   const subsNone = renderSubagentCatalog(subs, 50, 500, false, false)
   assert.match(subsNone, /subagent_manager_list/)
   assert.match(subsNone, /ask the user/)
-  assert.doesNotMatch(subsNone, /tool_manager_tools/)
+  assert.doesNotMatch(subsNone, /tool_manager_switch/)
 
   const rows = Array.from({ length: 52 }, (_, i) => ({ serverName: 'srv' + i, liveTools: ['t'] }))
   // `controlVisible` 是第 6 个位置参数（不在 opts 里）：opts / listToolVisible / sessionDisabled / sessionTools / controlVisible
@@ -5754,11 +5754,11 @@ test('折叠出口的硬不变量：三档出口各自点名正确的东西 —�
   assert.match(mcpOn, /mcp_manager_list/)
   const mcpCtrl = renderMcpStateSection(rows, { maxEntries: 50 }, false, [], { on: [], off: [] }, true)
   assert.match(mcpCtrl, /mcp_manager_list/)
-  assert.match(mcpCtrl, /tool_manager_tools/)
+  assert.match(mcpCtrl, /tool_manager_switch/)
   const mcpNone = renderMcpStateSection(rows, { maxEntries: 50 }, false, [], { on: [], off: [] }, false)
   assert.match(mcpNone, /mcp_manager_list/)
   assert.match(mcpNone, /ask the user/)
-  assert.doesNotMatch(mcpNone, /tool_manager_tools/)
+  assert.doesNotMatch(mcpNone, /tool_manager_switch/)
 })
 
 test('patch 载体行：cordis.patch.yml 里的官方行按组合同款判据解析，两路在场性 mounted > conditional > absent', () => {
