@@ -1572,7 +1572,11 @@
         const groupLabel = function (key) {
           if (key === 'other') return t('compat.tools.other')
           if (key === 'control') return t('compat.tools.group.control')
-          return t('compat.inject.domain.' + key)
+          // 分组键来自注入域内部名（`memoryGlobal` / `memoryWorkspace`），而界面上记忆只有
+          // 一枚合并后的「记忆」标签 —— 词典只定义 `compat.inject.domain.memory`。
+          // 不折的话组头会把内部键名原样显示出来。
+          const uiKey = key === 'memoryGlobal' || key === 'memoryWorkspace' ? 'memory' : key
+          return t('compat.inject.domain.' + uiKey)
         }
         const toolTableDisabled = toolTableBusy || scopeSessionLocked || toolTable.state === 'unknown'
         // 自主记忆那条工具没有独立开关：它的可见性只跟记忆页的两个开关走，
@@ -1664,7 +1668,11 @@
             // 记忆工具，它没有勾选框、不占一行。这里把它「现在开没开」和"实际一共下发几个"
             // 写清楚 —— 否则合计行的数字与模型真正看到的工具数会差一个。
             report.derived ? React.createElement('div', { key: 'derived', className: 'dsm-tooltable-derived' },
-              t('compat.tools.derived', { state: t(report.derived.active ? 'compat.tools.derived.on' : 'compat.tools.derived.off') }),
+              t('compat.tools.derived', {
+                name: report.derived.name,
+                tok: report.derived.tok,
+                state: t(report.derived.active ? 'compat.tools.derived.on' : 'compat.tools.derived.off'),
+              }),
               ' · ',
               t('compat.tools.sent', { count: report.sentCount })) : null,
             // 这一张表归属哪一层 / 为什么勾不动（锁）。读不到时这一节本来就不渲染。

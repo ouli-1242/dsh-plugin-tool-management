@@ -24,11 +24,13 @@
 - **控制面工具改名为 `tool_manager_switch`**：`list` / `enable` / `disable` / `repair` 四个动作不变。
 - **删除与回收站工具改名为 `plugin_manager_trash`**：`trash` / `restore` / `list` 三个动作不变。
 - **人设文件的 `tools` / `toolsDeny` 读取时翻译旧工具名**：改名后旧的 deny 名单不会静默失效。
+- **工具表表外那行写明工具名与体积**：改为 `memory_manager_note（≈N tok）随自主记忆开关`，不再只报「另有 1 个」。
 
 ### 修复
 
 - **回收站永久删除残留索引与状态**：删除后同步清掉启停索引、catalog 与 state 条目，不会留下「删了又回来」的空壳。
 - **工具重名不再中断整个装配**：与别的插件注册同名工具时只跳过那一条，其余工具与面板 API 照常可用。
+- **工具表的记忆分组标题显示内部键名**：组头改为「记忆」，不再出现 `compat.inject.domain.memoryGlobal`。
 
 ## [0.22.7] - 2026-11-12
 
