@@ -1667,12 +1667,8 @@
             // 表里能勾的只有手动清单里的工具；正文里还固定搭着一份跟随记忆页总开关的
             // 记忆工具，它没有勾选框、不占一行。这里把它「现在开没开」和"实际一共下发几个"
             // 写清楚 —— 否则合计行的数字与模型真正看到的工具数会差一个。
-            report.derived ? React.createElement('div', { key: 'derived', className: 'dsm-tooltable-derived' },
-              t('compat.tools.derived', {
-                name: report.derived.name,
-                tok: report.derived.tok,
-                state: t(report.derived.active ? 'compat.tools.derived.on' : 'compat.tools.derived.off'),
-              }),
+            report.derived && report.derived.active ? React.createElement('div', { key: 'derived', className: 'dsm-tooltable-derived' },
+              t('compat.tools.derived', { name: report.derived.name, tok: report.derived.tok }),
               ' · ',
               t('compat.tools.sent', { count: report.sentCount })) : null,
             // 这一张表归属哪一层 / 为什么勾不动（锁）。读不到时这一节本来就不渲染。

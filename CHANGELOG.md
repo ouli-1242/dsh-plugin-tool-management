@@ -24,7 +24,7 @@
 - **控制面工具改名为 `tool_manager_switch`**：`list` / `enable` / `disable` / `repair` 四个动作不变。
 - **删除与回收站工具改名为 `plugin_manager_trash`**：`trash` / `restore` / `list` 三个动作不变。
 - **人设文件的 `tools` / `toolsDeny` 读取时翻译旧工具名**：改名后旧的 deny 名单不会静默失效。
-- **工具表表外那行写明工具名与体积**：改为 `memory_manager_note（≈N tok）随自主记忆开关`，不再只报「另有 1 个」。
+- **工具表表外那行写明工具名与体积**：改为 `memory_manager_note（≈N）随自主记忆开启`；关闭自主记忆时整行不显示。
 
 ### 修复
 

@@ -701,7 +701,7 @@ button.dsm-qty:disabled{cursor:default}
 .dsm-tooltable-summary{display:flex;align-items:center;gap:8px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
 /* 会话层那一句（0.21.2）：这张工具表归属哪一层、改动影响谁。 */
 .dsm-tooltable-scope{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
-/* 「另有 <工具名>（≈N tok）随自主记忆开关 · 实际下发 N 个」：不在表里占行，用弱一档的字色挂在合计下面，
+/* 「<工具名>（≈N）随自主记忆开启 · 实际下发 N 个」（只在开启时显示）：不在表里占行，用弱一档的字色挂在合计下面，
    与上面的手动合计分开读。 */
 .dsm-tooltable-derived{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
 /* 「保存方案 / 恢复方案」钉在合计那一行的最右（用户 2026-09-23 指定位置）。
