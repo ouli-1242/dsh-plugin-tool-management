@@ -1,10 +1,11 @@
 // 工具改名的迁移表：旧名 → 新名。
 //
-// 为什么单独一个文件：这张表有三个使用方 —— 全局侧车 `tool-table.json`（读侧翻译一次、
+// 为什么单独一个文件：这张表有四个使用方 —— 全局侧车 `tool-table.json`（读侧翻译一次、
 // 回写盘；见 `tools/table.ts` 的 `migrateLegacyToolNames`）、会话侧车 `scope-overrides.json`
-// 的工具表名单（`scope/scope-overrides.ts` 的 `normalizeToolNameList`）、以及场景档案
-// 快照里抄的那份（`memories/index-io.ts`）。三处都是同一类问题：「工具改名了，盘上还是
-// 旧名」。各写一份必然漂移 —— 一处漏了就是"用户关掉的那条在新名字上静默失效"。
+// 的工具表名单（`scope/scope-overrides.ts` 的 `normalizeToolNameList`）、场景档案
+// 快照里抄的那份（`memories/index-io.ts`），以及人设文件的 `tools` / `toolsDeny` /
+// `toolsByPreset`（`subagents/persona-parse.ts`）。四处都是同一类问题：「工具改名了，盘上
+// 还是旧名」。各写一份必然漂移 —— 一处漏了就是"用户关掉的那条在新名字上静默失效"。
 //
 // 为什么放在根目录这一叶（零依赖）：`scope/` 与 `memories/` 都是低层，反向引
 // `tools/table.ts` 会把工具表那一层的依赖链（注入契约、工具依赖）接回来 —— 运行时环
@@ -42,6 +43,8 @@ export const LEGACY_TOOL_NAME_MAP: Readonly<Record<string, string>> = Object.fre
   memory_manager_set_enabled: 'memory_manager_switch',
   // 第一代的 `memory_manager_switch` 与现在同名、同义，不再需要映射。
   memory_switch: 'memory_manager_switch',
+  // 控制面工具：`tool_manager_tools` → `tool_manager_switch`（一对一）。
+  tool_manager_tools: 'tool_manager_switch',
   skill_manager_set_enabled: 'skill_manager_switch',
   subagent_manager_set_enabled: 'subagent_manager_switch',
   // 删除族：五个域各一条 → 合成一条 `plugin_manager_trash`（**多对一**）。

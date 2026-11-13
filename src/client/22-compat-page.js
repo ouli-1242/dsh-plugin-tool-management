@@ -1572,9 +1572,9 @@
         const groupLabel = function (key) {
           if (key === 'other') return t('compat.tools.other')
           if (key === 'control') return t('compat.tools.group.control')
-          // 分组键来自注入域内部名（`memoryGlobal` / `memoryWorkspace`），而界面上记忆只有
-          // 一枚合并后的「记忆」标签 —— 词典只定义 `compat.inject.domain.memory`。
-          // 不折的话组头会把内部键名原样显示出来。
+          // 分组键来自注入域内部名（`memoryGlobal` / `memoryWorkspace`），而工具表里记忆是
+          // 一组 —— 折到合并后的「记忆」标签。注入实况仍按全局 / 工作区分行显示，用各自的
+          // 词条；不折的话组头会把内部键名原样显示出来。
           const uiKey = key === 'memoryGlobal' || key === 'memoryWorkspace' ? 'memory' : key
           return t('compat.inject.domain.' + uiKey)
         }
@@ -1664,9 +1664,10 @@
                   title: presetCount ? t('compat.tools.preset.apply.tip') : t('compat.tools.preset.apply.tipEmpty'),
                   onClick: function () { setToolPreset({ mode: 'apply' }) },
                 }, t('compat.tools.preset.apply')))),
-            // 表里能勾的只有手动清单里的工具；正文里还固定搭着一份跟随记忆页总开关的
-            // 记忆工具，它没有勾选框、不占一行。这里把它「现在开没开」和"实际一共下发几个"
-            // 写清楚 —— 否则合计行的数字与模型真正看到的工具数会差一个。
+            // 表里能勾的只有手动清单里的工具；正文里还固定搭着一份跟随自主记忆开关的
+            // 记忆工具，它没有勾选框、不占一行。开启时补一行写明它和"实际一共下发几个"
+            // —— 否则合计行的数字与模型真正看到的工具数会差一个；关闭时没有这个差额，
+            // 整行不显示。
             report.derived && report.derived.active ? React.createElement('div', { key: 'derived', className: 'dsm-tooltable-derived' },
               t('compat.tools.derived', { name: report.derived.name, tok: report.derived.tok }),
               ' · ',

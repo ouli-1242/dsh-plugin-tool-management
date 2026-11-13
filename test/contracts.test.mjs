@@ -187,6 +187,13 @@ test('旧工具名迁移：用户「关掉了某条」的意图不能在改名�
     })).settings.hidden,
     ['memory_manager_get', 'memory_manager_remember', 'memory_manager_note', 'memory_manager_switch'],
   )
+  // 控制面与回收站：旧名一对一迁到新名。
+  assert.deepEqual(
+    migrateLegacyToolNames(normalizeToolTableSettings({
+      hidden: ['tool_manager_tools', 'plugin_manager_remove'],
+    })).settings.hidden,
+    ['tool_manager_switch', 'plugin_manager_trash'],
+  )
   // 不认识的名字原样保留：分不清"用户的旧名"与"别的插件的工具名"，误删比留着一条死名更糟。
   assert.equal(LEGACY_TOOL_NAME_MAP.other_plugin_tool, undefined)
 })
@@ -4826,6 +4833,20 @@ test('人设名单字段逐条转义可往返：逗号 / 冒号 / 引号 / 换�
   assert.deepEqual(parsePersona(single, 'p').toolsDeny, ['a,b'])
   // 未转义的旧格式（存量文件）照旧可读。
   assert.deepEqual(parsePersona('---\ntoolsDeny: a, b\n---\n\nbody\n', 'p').toolsDeny, ['a', 'b'])
+})
+
+test('人设里的旧工具名读取时翻译：旧 deny 名单不会静默失效', () => {
+  // deny 失效是 fail-open —— 被禁的工具反而能用，比 allow 少一条更危险。
+  const doc = parsePersona(
+    '---\ntools: memory_get, tool_manager_tools\ntoolsDeny: memory_switch, plugin_manager_remove\n'
+    + 'toolsByPreset:\n  std: deny: memory_note, memory_manager_write\n---\n\nbody\n',
+    'p',
+  )
+  assert.deepEqual(doc.tools, ['memory_manager_get', 'tool_manager_switch'])
+  assert.deepEqual(doc.toolsDeny, ['memory_manager_switch', 'plugin_manager_trash'])
+  assert.deepEqual(doc.toolsByPreset.std.names, ['memory_manager_note', 'memory_manager_remember'])
+  // 幂等：写回再读，新名原样返回。
+  assert.deepEqual(parsePersona(serializePersona({ toolsDeny: doc.toolsDeny, body: 'b' }), 'p').toolsDeny, doc.toolsDeny)
 })
 
 // ── 令牌覆盖条目的追加（0.21.2 P2-7）────────────────────────────────────
