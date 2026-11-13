@@ -200,17 +200,17 @@ export const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
     // 出口句放在**正文之后**（`afterBody`）：它说的是"刚才那段没列全的部分去哪查"——
     // 模型读完 `## Not injected` 名单紧接着读到出口，顺序才通。条件判据不变：
     // `text.includes('more not listed')` 只在折叠行出现时命中（rest > 0）；rest = 0（清单列全）
-    // 时不发——那些条目有名字，模型调 `memory_get` 就行；工具被关掉（兼容页 /
+    // 时不发——那些条目有名字，模型调 `memory_manager_get` 就行；工具被关掉（兼容页 /
     // 人设 toolsDeny）时不点名——与另外三域同一纪律。
     afterBody: ({ text, toolHidden }) => {
       // 折叠行 `more not listed` 和截断标记 `(Truncated:` 两种信号都要覆盖：
       //   - 折叠行 = 清单部分列了 + 剩余没列 → 没名的那些需要 list 工具发现
       //   - 标记 = 连清单都没放进来 → 全部没名，更需要 list 工具
       //   - 清单列全（`## Not injected` + 所有名字，rest = 0）→ 两种信号都没有 → 不发：
-      //     模型用 `memory_get` 按名字读就行
+      //     模型用 `memory_manager_get` 按名字读就行
       if (!text.includes('more not listed') && !text.includes('(Truncated:')) return undefined
-      if (toolHidden('memory_get')) return undefined
-      return 'Not all memories fit here — see the rest with `memory_get`.'
+      if (toolHidden('memory_manager_get')) return undefined
+      return 'Not all memories fit here — see the rest with `memory_manager_get`.'
     },
     supersede: SUPERSEDE_NOTE,
   },
@@ -367,7 +367,7 @@ export const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
 
 /**
  * `how` 行里**点名过的工具**（`skill` / `skill_manager_read` / `subagent` /
- * `subagent_manager_run` / `memory_get`）。
+ * `subagent_manager_run` / `memory_manager_get`）。
  *
  * 为什么要有这份名单：一条 `how` 行是否成立，取决于它点名的工具在**这个 agent 手里**还在不在。
  * 名单放在这里而不是调用方 —— 与上面那几条 `how` 相邻，改一处不会漏另一处。
@@ -382,11 +382,11 @@ export const DOMAIN_FRAME: Partial<Record<InjectDomainKey, DomainFrame>> = {
  * 人设目录的「没有合适人设 → 用官方委派」半句只在官方委派工具真的存在时才成立 —— 它们不是
  * 本插件的工具，但 `toolVisibleFor` 走 `tools.get(name, agent)`，官方注册表照样答得上来。
  *
- * `memory_get` 加入：记忆段截断折叠行不点名查询工具时，
+ * `memory_manager_get` 加入：记忆段截断折叠行不点名查询工具时，
  * 被截掉的条目无名、模型无法发现它们。`how` 在折叠行出现时点名它，与技能 / 子智能体 /
  * MCP 三个域的溢出行同构。
  */
-export const HOW_NAMED_TOOLS: readonly string[] = ['skill', 'skill_manager_read', 'subagent', 'subagent_manager_run', 'memory_get']
+export const HOW_NAMED_TOOLS: readonly string[] = ['skill', 'skill_manager_read', 'subagent', 'subagent_manager_run', 'memory_manager_get']
 
 /** 域声明里没登记的 key（理论上到不了这里）：给一个不出错的通用框架。 */
 export const fallbackFrame = (label: string): DomainFrame => ({

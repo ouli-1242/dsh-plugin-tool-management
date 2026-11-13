@@ -110,7 +110,7 @@ import { createPromptsService } from '../lib/prompts/service.js'
 import { createScenePromptSync } from '../lib/scene-prompt-sync.js'
 
 test('域与工具名前缀双向对得上（对不上就有域永远统计不到调用）', () => {
-  // 工作区笔记没有专属工具：`memory_note` 是两层共用的写入口，按前缀归
+  // 工作区笔记没有专属工具：`memory_manager_note` 是两层共用的写入口，按前缀归
   // `memoryGlobal`。空数组是显式声明「这个域没有工具」，不是漏配。
   const noTool = new Set(['memoryWorkspace'])
   for (const key of INJECT_DOMAIN_KEYS) {
@@ -126,15 +126,15 @@ test('域与工具名前缀双向对得上（对不上就有域永远统计不�
   }
   assert.equal(domainOfTool('read_file'), undefined, '不是本插件的工具不该被认领')
   // 共用写入口仍归全局记忆域：自动记忆的采纳遥测不按层拆（工具名反推不出写哪层）。
-  assert.equal(domainOfTool('memory_note'), 'memoryGlobal')
+  assert.equal(domainOfTool('memory_manager_note'), 'memoryGlobal')
 })
 
 test('记忆族与场景族各归自己的域，中途用过的名字不是别名', () => {
   // 破了这一条的后果是**静默**的：漏配 DOMAIN_TOOL_PREFIX 时编译不报错，症状只是
   // 兼容页那一组工具掉进「其它」桶、注入实况里该域的调用数永远是 0。
-  assert.equal(domainOfTool('memory_remember'), 'memoryGlobal')
-  assert.equal(domainOfTool('memory_get'), 'memoryGlobal')
-  assert.equal(domainOfTool('memory_switch'), 'memoryGlobal')
+  assert.equal(domainOfTool('memory_manager_remember'), 'memoryGlobal')
+  assert.equal(domainOfTool('memory_manager_get'), 'memoryGlobal')
+  assert.equal(domainOfTool('memory_manager_switch'), 'memoryGlobal')
   // 场景与记忆是**两个域**（`scene-manager-catalog` / `memory-global-catalog`），
   // 工具族跟着分开。
   assert.equal(domainOfTool('scene_manager_save'), 'scene')
@@ -161,14 +161,14 @@ test('旧工具名迁移：用户「关掉了某条」的意图不能在改名�
   }))
   assert.equal(migrated.changed, true)
   assert.deepEqual(migrated.settings.hidden, [
-    'memory_remember', 'mcp_manager_switch', 'skill_manager_save', 'other_plugin_tool',
+    'memory_manager_remember', 'mcp_manager_switch', 'skill_manager_save', 'other_plugin_tool',
   ])
   // 幂等：已经全是新名时必须报"没改"，否则每次读盘都会白回写一次。
   assert.equal(migrateLegacyToolNames(migrated.settings).changed, false)
   // 两条旧工具并成同一条 save 时只留一份（去重，不是简单替换）。
   assert.deepEqual(
     migrateLegacyToolNames(normalizeToolTableSettings({ hidden: ['memory_manager_write', 'memory_manager_update'] })).settings.hidden,
-    ['memory_remember'],
+    ['memory_manager_remember'],
   )
   // 0.14.x：「拨一个开关」六域同形 —— `_set_enabled` → `_switch`（**一对一**，参数没动，
   // 所以不涉及语义合并）。漏了这三条的后果与上面完全一样，且更容易漏 ——
@@ -177,20 +177,28 @@ test('旧工具名迁移：用户「关掉了某条」的意图不能在改名�
     migrateLegacyToolNames(normalizeToolTableSettings({
       hidden: ['memory_manager_set_enabled', 'memory_manager_switch', 'skill_manager_set_enabled', 'subagent_manager_set_enabled'],
     })).settings.hidden,
-    ['memory_switch', 'skill_manager_switch', 'subagent_manager_switch'],
+    ['memory_manager_switch', 'skill_manager_switch', 'subagent_manager_switch'],
+  )
+  // 记忆族第二代名字（`memory_*`）迁到第三代（`memory_manager_*`）；第一代
+  // `memory_manager_switch` 与现名同名同义，保持原样。
+  assert.deepEqual(
+    migrateLegacyToolNames(normalizeToolTableSettings({
+      hidden: ['memory_get', 'memory_remember', 'memory_note', 'memory_manager_switch'],
+    })).settings.hidden,
+    ['memory_manager_get', 'memory_manager_remember', 'memory_manager_note', 'memory_manager_switch'],
   )
   // 不认识的名字原样保留：分不清"用户的旧名"与"别的插件的工具名"，误删比留着一条死名更糟。
   assert.equal(LEGACY_TOOL_NAME_MAP.other_plugin_tool, undefined)
 })
 
-test('旧读取工具的隐藏设置不会连坐 memory_get', () => {
-  // read/search 出厂就是关着的；把旧名单直接映射到 memory_get 会让升级用户的
+test('旧读取工具的隐藏设置不会连坐 memory_manager_get', () => {
+  // read/search 出厂就是关着的；把旧名单直接映射到 memory_manager_get 会让升级用户的
   // 唯一读取入口也变关。它们不是新工具的旧名，按死名原样保留即可。
   const migrated = migrateLegacyToolNames(normalizeToolTableSettings({
     hidden: ['memory_manager_read', 'memory_manager_search'],
   }))
   assert.deepEqual(migrated.settings.hidden, ['memory_manager_read', 'memory_manager_search'])
-  assert.ok(!migrated.settings.hidden.includes('memory_get'))
+  assert.ok(!migrated.settings.hidden.includes('memory_manager_get'))
 })
 
 test('深度探针读的是官方那几个字段，取最大者', () => {
@@ -258,7 +266,7 @@ test('遥测不反噬：任何输入都不抛（它绝不能影响工具调用�
     settings: () => DEFAULT_INJECT_SETTINGS,
     factsFor: async () => undefined,
   })
-  assert.doesNotThrow(() => injector.noteToolUse('memory_get', undefined))
+  assert.doesNotThrow(() => injector.noteToolUse('memory_manager_get', undefined))
   assert.doesNotThrow(() => injector.noteToolUse(undefined, {}))
   assert.doesNotThrow(() => injector.live())
   assert.doesNotThrow(() => injector.dispose())
@@ -899,7 +907,7 @@ test('工具描述里引用的注入板块名必须真实存在（跨模块引�
   // ③ 自洽性。破了这一条的后果是**静默**的：工具描述把模型指向一个不存在的板块名，
   // 模型照着去找那个 reminder 会找不到 —— 编译、构建、类型检查、i18n 检查都不报。
   // 2026-09-23 出过一次：注入层把「场景和记忆」拆成「场景」+「记忆」两段、改了板块标题，
-  // 而 `memory_get` 的描述里还写着「本机当前的场景和记忆」。
+  // 而 `memory_manager_get` 的描述里还写着「本机当前的场景和记忆」。
   //
   // 判据只认**以 `Current ` 开头**的双引号串 —— 那是板块名的形态（2026-10-18 起六个板块
   // 统一成英文 `Current <域>`，见 context-inject-frame.ts 的 `DomainFrame.title`）；别的引号
@@ -4987,10 +4995,10 @@ test('自主记忆频率门：窗口内新增到量就拒绝，合并不占名�
 test('记忆读取入口保留可见：合并后的清单 / 搜索 / 正文是发现路径', () => {
   // 旧的三条读取工具里，只有 list 默认可见；合并后必须保住这一条 —— 藏掉它，
   // 被预算截断的条目与 save 需要的 id 就没有发现路径了。
-  assert.ok(!DEFAULT_HIDDEN_TOOLS.includes('memory_get'))
+  assert.ok(!DEFAULT_HIDDEN_TOOLS.includes('memory_manager_get'))
 })
 
-test('memory_get kind=note 的清单带类型：模型要靠它决定该不该照做', () => {
+test('memory_manager_get kind=note 的清单带类型：模型要靠它决定该不该照做', () => {
   // 清单是模型看「有哪些笔记」的唯一入口。它显示了 status / tier / injects / pendingReason，
   // 却不显示 `kind` —— 而 `kind` 是「这条是做法还是偏好」的唯一机器可读标记，也是保质期的来源。
   // `evolution-list` 一直在返回 `kind`，是渲染侧没读。
@@ -5009,7 +5017,7 @@ test('memory_get kind=note 的清单带类型：模型要靠它决定该不该�
   )
 })
 
-test('memory_note 能传 kind：不给时只能靠措辞猜，而「必须」会被误判成纠正', () => {
+test('memory_manager_note 能传 kind：不给时只能靠措辞猜，而「必须」会被误判成纠正', () => {
   // `kind` 决定保质期（`ttlDaysOf`：事实 / 做法 30 天后提醒复核，偏好 / 纠正不过期）。
   // 模型知道这句话是什么类型，但此前**没有参数可以表达** —— 只能靠 `inferKind` 按字面猜，
   // 而「必须 / 不要」这类约束词在中文里几乎任何做法都带一个，会被判成 `correction`（不过期）。
@@ -5023,7 +5031,7 @@ test('memory_note 能传 kind：不给时只能靠措辞猜，而「必须」会
 
 test('自主笔记旧名合并成一条：出厂只藏这一条，旧名全部迁过来', () => {
   const old = ['memory_manager_learn', 'memory_manager_forget', 'memory_manager_organize', 'memory_manager_procedure_done', 'memory_manager_auto']
-  assert.equal(PROACTIVE_MEMORY_TOOL, 'memory_note')
+  assert.equal(PROACTIVE_MEMORY_TOOL, 'memory_manager_note')
   assert.ok(DEFAULT_HIDDEN_TOOLS.includes(PROACTIVE_MEMORY_TOOL), '合并后的工具出厂默认隐藏')
   for (const name of old) {
     assert.ok(!DEFAULT_HIDDEN_TOOLS.includes(name), '旧名不该还留在出厂名单：' + name)
@@ -5053,13 +5061,13 @@ test('笔记引用带 note: 前缀：与用户记忆的 <scene>/<name> 分开', 
 })
 
 test('自主笔记工具双向跟随总开关：开→摘掉、关→加回，纯函数不改入参', () => {
-  const withTool = ['memory_get', PROACTIVE_MEMORY_TOOL]
-  assert.deepEqual(normalizeProactiveToolHidden(withTool, true), ['memory_get'])
-  assert.deepEqual(withTool, ['memory_get', PROACTIVE_MEMORY_TOOL], '归一不能改调用方那份名单')
+  const withTool = ['memory_manager_get', PROACTIVE_MEMORY_TOOL]
+  assert.deepEqual(normalizeProactiveToolHidden(withTool, true), ['memory_manager_get'])
+  assert.deepEqual(withTool, ['memory_manager_get', PROACTIVE_MEMORY_TOOL], '归一不能改调用方那份名单')
   // 关键回归：开着时存过一次工具表，盘上就永久没有这条了；关掉开关仍要把它加回来。
   assert.deepEqual(
-    normalizeProactiveToolHidden(['memory_get'], false),
-    ['memory_get', PROACTIVE_MEMORY_TOOL],
+    normalizeProactiveToolHidden(['memory_manager_get'], false),
+    ['memory_manager_get', PROACTIVE_MEMORY_TOOL],
   )
   assert.deepEqual(normalizeProactiveToolHidden([], false), [PROACTIVE_MEMORY_TOOL])
   assert.deepEqual(normalizeProactiveToolHidden([PROACTIVE_MEMORY_TOOL], true), [])
@@ -5067,9 +5075,9 @@ test('自主笔记工具双向跟随总开关：开→摘掉、关→加回，�
 })
 
 test('工具表数据里没有自主记忆工具：回包 / 落盘都摘掉，运行时仍双向强制', () => {
-  const withTool = ['memory_get', PROACTIVE_MEMORY_TOOL]
-  assert.deepEqual(stripProactiveToolHidden(withTool), ['memory_get'])
-  assert.deepEqual(withTool, ['memory_get', PROACTIVE_MEMORY_TOOL], 'strip 不能改调用方那份名单')
+  const withTool = ['memory_manager_get', PROACTIVE_MEMORY_TOOL]
+  assert.deepEqual(stripProactiveToolHidden(withTool), ['memory_manager_get'])
+  assert.deepEqual(withTool, ['memory_manager_get', PROACTIVE_MEMORY_TOOL], 'strip 不能改调用方那份名单')
   assert.deepEqual(stripProactiveToolHidden([]), [])
   assert.deepEqual(stripProactiveToolHidden([PROACTIVE_MEMORY_TOOL]), [])
 
@@ -5156,17 +5164,17 @@ test('确认门按「动作 × 作用域」判定：恢复路径不拦，机器�
   assert.equal(asks('mcp_manager_switch', { server: 's', action: 'stop' }), true)
   assert.equal(asks('mcp_manager_switch', { server: 's', action: 'restart' }), false)
   // 开关：默认写本会话（爆炸半径一个对话）不问，机器级才问
-  assert.equal(asks('memory_switch', { id: 'global/a', enabled: false }), false)
-  assert.equal(asks('memory_switch', { id: 'global/a', enabled: false, scope: 'global' }), true)
+  assert.equal(asks('memory_manager_switch', { id: 'global/a', enabled: false }), false)
+  assert.equal(asks('memory_manager_switch', { id: 'global/a', enabled: false, scope: 'global' }), true)
   // 改名前的参数名仍能触发机器级确认（兼容一次，不注册别名工具）。
-  assert.equal(asks('memory_switch', { memory: 'global/a', enabled: false, scope: 'global' }), true)
+  assert.equal(asks('memory_manager_switch', { memory: 'global/a', enabled: false, scope: 'global' }), true)
   assert.equal(asks('skill_manager_switch', { name: 'x', enabled: false }, 'global'), true)
   // 参数不成立时不拦：让工具自己报错，别产生无效审批
   assert.equal(asks('subagent_manager_switch', { name: 'x' }), false)
 })
 
 test('自主记忆不走宿主确认门：范围卡在工具内部处理', () => {
-  const reason = (args) => argConditionalConfirmReason('memory_note', args, 'session')
+  const reason = (args) => argConditionalConfirmReason('memory_manager_note', args, 'session')
   // 宿主审批层不介入：范围由工具内的卡片决定；待确认由记忆页逐条批准。
   assert.equal(reason({ action: 'learn', text: '这个仓库统一用 pnpm', layer: 'workspace' }), null)
   assert.equal(reason({ action: 'learn', text: '所有项目都先给结论', layer: 'global' }), null)
@@ -5178,21 +5186,21 @@ test('must-ask：完全权限也不许跳过的确认（删除 / 机器级停用
   // 与 argConditionalConfirmReason 同口径：只有真的会弹卡的那次才谈得上 must-ask。
   const must = (name, args, mode = 'session') => isMustAskConfirm(name, args, mode)
   // 自主记忆的新增/遗忘不在审批层：待确认由记忆页逐条批准，不进 must-ask。
-  assert.equal(must('memory_note', { action: 'learn', text: '统一用 pnpm' }), false)
-  assert.equal(must('memory_note', { text: '统一用 pnpm' }), false, '缺省 action 也是 learn')
-  assert.equal(must('memory_note', { action: 'forget', note: 'x' }), false)
+  assert.equal(must('memory_manager_note', { action: 'learn', text: '统一用 pnpm' }), false)
+  assert.equal(must('memory_manager_note', { text: '统一用 pnpm' }), false, '缺省 action 也是 learn')
+  assert.equal(must('memory_manager_note', { action: 'forget', note: 'x' }), false)
   // 删除：trash 是数据处置；restore / list 可跳过。
   assert.equal(must('plugin_manager_remove', { action: 'trash', domain: 'memory', id: 'global/x' }), true)
   assert.equal(must('plugin_manager_remove', { action: 'restore', domain: 'memory', id: 't' }), false)
   assert.equal(must('plugin_manager_remove', { action: 'trash', domain: 'nope', id: 'x' }), false, '注定失败的调用不弹卡')
   // 机器级停用工具 = 把工具从所有对话拿走；repair 是不可逆的数据处置。会话级停用、启用可跳过。
-  assert.equal(must('tool_manager_tools', { action: 'disable', tools: ['memory_get'], scope: 'global' }), true)
+  assert.equal(must('tool_manager_tools', { action: 'disable', tools: ['memory_manager_get'], scope: 'global' }), true)
   assert.equal(must('tool_manager_tools', { action: 'disable', tools: ['x'] }, 'global'), true)
   assert.equal(must('tool_manager_tools', { action: 'disable', tools: ['x'] }), false, '会话级停用随时可退')
   assert.equal(must('tool_manager_tools', { action: 'enable', tools: ['x'], scope: 'global' }), false, '启用是加回能力')
   assert.equal(must('tool_manager_tools', { action: 'repair', target: 'memory-index' }), true)
   assert.equal(must('tool_manager_tools', { action: 'list' }), false)
-  assert.equal(must('memory_switch', { id: 'global/a', enabled: false, scope: 'global' }), false, '未列入 must-ask 的维持可跳过')
+  assert.equal(must('memory_manager_switch', { id: 'global/a', enabled: false, scope: 'global' }), false, '未列入 must-ask 的维持可跳过')
 })
 
 // 签发端与校验端的指纹必须同口径（#22）：get-current 发的是 stampOfText 16 位指纹，

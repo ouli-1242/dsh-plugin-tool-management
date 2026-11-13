@@ -680,7 +680,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
       }
     },
 
-    /** 读一条自动记忆的详情（界面展开 / `memory_get` 兜底）。 */
+    /** 读一条自动记忆的详情（界面展开 / `memory_manager_get` 兜底）。 */
     'evolution-read': async (args: any) => {
       if (!learner) return { ok: false, error: '自主记忆尚未启用', code: 'unavailable' }
       try {
@@ -803,7 +803,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
     },
 
     /**
-     * 列自动记忆（界面与 `memory_get` 共用）。
+     * 列自动记忆（界面与 `memory_manager_get` 共用）。
      *
      * 与 `rules-list` 分开：那条列的是"用户记忆"，这条列的是"agent 学的" —— 两者在界面上
      * 是同一页的两节，但权威等级、状态机、可做的操作都不同，混成一份返回会让界面到处判 `origin`。
@@ -816,7 +816,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
         const kindFilter = typeof args?.kind === 'string' && args.kind !== '' ? args.kind : undefined
         const includeAll = args?.all === true
         // 界面传当前工作区 hash：工作区卡只列本项目，别把别的仓库的条目混进来。
-        // 模型侧的 `memory_get` 不传，保持全库可见。
+        // 模型侧的 `memory_manager_get` 不传，保持全库可见。
         const workspaceFilter = typeof args?.workspaceHash === 'string' && args.workspaceHash !== '' ? args.workspaceHash : undefined
         // 工作区目录消失的条目要能被界面看出来（用户：工作区删除后记忆要跟着"消失"）：
         // hash → missingAt。目录回来了 sweep 会清掉这个标记并同步恢复记忆。
@@ -873,7 +873,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
             tier: st ? tierOf(st.evidence) : 'inferred',
             oneLine: entry.oneLine,
             // 正文只在明确要求时返回（`withBody`）：界面列表用不上它，整库带上会让回包
-            // 大一个量级；而 `memory_get` 的搜索需要它 —— 只搜 `oneLine`（160 宽度截断
+            // 大一个量级；而 `memory_manager_get` 的搜索需要它 —— 只搜 `oneLine`（160 宽度截断
             // 摘要）等于「搜不到正文后半截的内容」，与工具描述写的 "or body" 不符。
             ...(args?.withBody === true ? { body: entry.body } : {}),
             ...(entry.title !== undefined ? { title: entry.title } : {}),

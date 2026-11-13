@@ -1,9 +1,9 @@
-// 记忆（rules）域的 model 工具：memory_get / memory_switch / memory_remember。
+// 记忆（rules）域的 model 工具：memory_manager_get / memory_manager_switch / memory_manager_remember。
 //
-// 自主笔记（agent 学的一句话）是另一族 `memory_note`：两族按对象分开，读取统一走
-// `memory_get`，id 形状也不同（用户记忆 `<scene>/<name>`，笔记 `note:<layer>/<slug>`）。
+// 自主笔记（agent 学的一句话）是另一族 `memory_manager_note`：两族按对象分开，读取统一走
+// `memory_manager_get`，id 形状也不同（用户记忆 `<scene>/<name>`，笔记 `note:<layer>/<slug>`）。
 //
-// 为什么工具名是 `memory_*` 而不是 `scene_memory_manager_*`：后者描述的是**域**，
+// 为什么工具名是 `memory_manager_*` 而不是 `scene_memory_manager_*`：后者描述的是**域**，
 // 而这些工具操作的全是记忆。加场景能力时这个错配就现形了 —— 场景是另一个对象（容器，
 // 进入时切换 mcp / 技能 / 人设），硬塞进同一个写工具会让 `description` 变成双义参数、
 // 门禁按参数分叉（记忆写入有开关可放行，场景写入是改运行时环境、不该有那条路）。
@@ -17,7 +17,7 @@
 // 模型必须自己先查一次再决定调哪条，而它手里的清单可能已经过期。合并后由工具侧兜住。
 //
 // 活动场景的记忆正文会自动注入上下文（无需调用工具读取）；这里的工具用于查询/编辑规则
-// 本身。memory_remember 受 tools/pre-execute 审批门禁。
+// 本身。memory_manager_remember 受 tools/pre-execute 审批门禁。
 // 路径锚点：$DSH_HOME/tool-management/memories/<场景>/…（场景 `global` = 界面「全局」）。
 
 import { GLOBAL_SCENE, MAX_GROUP_SEGMENT_LENGTH, SHARED_GROUP } from '../memories/constants.js'
@@ -37,7 +37,7 @@ export interface NoteLayers {
 
 /** 记忆工具装配后的可刷新句柄。 */
 export interface MemoryToolsHandle {
-  /** 按最新设置重算 `memory_note` 的 `layer` 参数（设置写入后调用）。 */
+  /** 按最新设置重算 `memory_manager_note` 的 `layer` 参数（设置写入后调用）。 */
   refreshNoteSchema(): void
 }
 
@@ -59,7 +59,7 @@ export interface MemoryToolDeps extends ToolDomainDeps {
   /**
    * 当前生效的自主记忆层；省略 = 两层都按开处理（旧装配 / 测试）。
    *
-   * 传 `undefined` 时取全局设置：`memory_note` 的工具 schema 只有一份，不能按会话变。
+   * 传 `undefined` 时取全局设置：`memory_manager_note` 的工具 schema 只有一份，不能按会话变。
    */
   autoNoteLayers?: (agent?: unknown) => NoteLayers
   /** 读侧实际开启的层（子代理按父会话作用域）；省略时退回 `autoNoteLayers`。 */
@@ -147,7 +147,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): MemoryToolsHandle {
   /**
    * 这条规则是不是自主笔记而不是用户记忆。
    *
-   * `memory_get` 把两族并成一份输出，用户记忆那一半必须把笔记摘掉 —— 否则同一句话
+   * `memory_manager_get` 把两族并成一份输出，用户记忆那一半必须把笔记摘掉 —— 否则同一句话
    * 会在「user memories」与「agent notes」各出现一次。`origin` 是权威字段；旧数据
    * 没有它时按目录判（`_ws` / `_session` 只由笔记后端写入，见 memories/catalog.ts）。
    */
@@ -298,7 +298,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): MemoryToolsHandle {
           (e.key && String(e.key) !== String(e.id).slice(String(e.id).lastIndexOf('/') + 1) ? ' · slot ' + String(e.key) : '') +
           (e.title ? ' · ' + String(e.title) : '') +
           // 类型决定保质期，也是「这条是做法还是偏好」的唯一机器可读标记：
-          // 模型要靠它决定该不该照着做、值不值得 `memory_get` 读全文。
+          // 模型要靠它决定该不该照着做、值不值得 `memory_manager_get` 读全文。
           // `evolution-list` 一直在返回 `kind`，这里此前没读。
           (e.kind ? ' · ' + String(e.kind) : '') +
           ' · ' + String(e.tier || 'inferred') +
@@ -436,7 +436,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): MemoryToolsHandle {
         throw new Error('no user memory with id "' + id + '"; ' + (e instanceof Error ? e.message : String(e)))
       }
     }
-    throw new Error('no user memory with id "' + id + '". Call memory_get with no id to list what exists.')
+    throw new Error('no user memory with id "' + id + '". Call memory_manager_get with no id to list what exists.')
   }
 
   /**
@@ -480,7 +480,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): MemoryToolsHandle {
   }
 
   register(defineTool({
-    name: 'memory_get',
+    name: 'memory_manager_get',
     description: 'Look up user-written memories and agent notes. No id → catalog (what exists and what injects); `id` → full body; `query` → filtered catalog with snippets. Agent note ids start with `note:`. Use this for ids and for entries not already in your context. Does not modify any memory; reading an agent note does count as a use, which keeps a note that is actually needed from aging out.',
     parameters: {
       id: { type: 'string', description: 'Read one entry: a user memory id (<scene>/<name>) or an agent note id (note:...).' },
@@ -534,7 +534,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): MemoryToolsHandle {
     },
   }))
   register(defineTool({
-    name: 'memory_switch',
+    name: 'memory_manager_switch',
     // 为什么叫 `_switch` 而不是 `_set_enabled`：六个域里"拨一个开关"
     // 是同一件事，名字该同形 —— `mcp_manager_switch` 早就是这个名字，`_set_enabled` 只剩
     // 记忆 / 技能 / 人设三族在叫。**参数保留 `enabled` 布尔**：这里没有 `restart` 那第三个
@@ -566,7 +566,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): MemoryToolsHandle {
       if (memory === '') throw new Error('missing argument: id — the memory id like <scene>/<name>.')
       // 笔记不是用户记忆：这条工具拨的是索引里的开关，笔记的删除/停用走另一族。
       if (isNoteRef(memory)) {
-        throw new Error('that is an agent note, not a user memory: use ' + noteTool(exec && exec.agent, 'memory_note action=forget', 'the agent-note tool') + '. User memory ids look like <scene>/<name>.')
+        throw new Error('that is an agent note, not a user memory: use ' + noteTool(exec && exec.agent, 'memory_manager_note action=forget', 'the agent-note tool') + '. User memory ids look like <scene>/<name>.')
       }
       // `enabled` 必须是布尔：`rules-toggle` 缺了它直接拒（ops/memory.ts），但那是给用户看的
       // 中文 op 错；这里先挡一句说清"这条工具要什么"。
@@ -614,7 +614,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): MemoryToolsHandle {
     },
   }))
   register(defineTool({
-    name: 'memory_remember',
+    name: 'memory_manager_remember',
     // 写入口只按**范围**分叉，不再按内容长短分叉：用户说「记录 a」时，唯一要判断的是
     // 「记到哪儿」，而那是用户的问题，不是模型能猜的。旧版按"一句话 → 笔记 / 多段 → 记忆"
     // 重定向，模型于是要在两条工具、三种后端之间选，参数串用是必然的。
@@ -647,11 +647,11 @@ export function buildMemoryTools(deps: MemoryToolDeps): MemoryToolsHandle {
       // 当成一次更新写回去 —— 真实会话里 `action=forget` + `content` 就把一条待删
       // 记忆的正文改成了「删」，回执却说更新成功。
       if (actionArg !== '' && actionArg !== 'forget') {
-        throw new Error('unknown action: ' + actionArg + ' — memory_remember creates or updates; use action=forget with id to delete a user memory.')
+        throw new Error('unknown action: ' + actionArg + ' — memory_manager_remember creates or updates; use action=forget with id to delete a user memory.')
       }
       if (actionArg === 'forget') {
-        if (rawId === '') throw new Error('missing argument: id — the user memory to delete (<scene>/<name>). Agent notes use memory_note action=forget.')
-        if (isNoteRef(rawId)) throw new Error('that is an agent note: delete it with memory_note action=forget.')
+        if (rawId === '') throw new Error('missing argument: id — the user memory to delete (<scene>/<name>). Agent notes use memory_manager_note action=forget.')
+        if (isNoteRef(rawId)) throw new Error('that is an agent note: delete it with memory_manager_note action=forget.')
         // 与 update 路径同一条兜底：裸 id 也可能是笔记 id（`note:` 前缀可省）。
         // 两条路不一致时，模型按 update 的习惯传裸 id 来删，会得到"这不是用户记忆"的
         // 错误，而它其实只是忘了加前缀。
@@ -659,7 +659,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): MemoryToolsHandle {
           let note: any = null
           try { note = await opOf(evo, 'evolution-read')({ id: rawId }) } catch { note = null }
           if (note && note.ok !== false) {
-            throw new Error('"' + rawId + '" is an agent note, not a user memory: delete it with memory_note action=forget (note=' + rawId + ').')
+            throw new Error('"' + rawId + '" is an agent note, not a user memory: delete it with memory_manager_note action=forget (note=' + rawId + ').')
           }
         }
         if (!rawId.includes('/')) throw new Error('id must be <scene>/<name> (a user memory): ' + rawId)
@@ -672,7 +672,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): MemoryToolsHandle {
         if (!all || all.ok === false) throw new Error((all && all.error) || 'failed to read memories')
         const hit = (all.rules || []).find((x: any) => String(x.id) === rawId)
         if (!hit) throw new Error('no memory with id "' + rawId + '".' + existingNote((all.rules || []).map((x: any) => String(x.id)), 'memory ids'))
-        if (isAutoRule(hit)) throw new Error('that is an agent note: delete it with memory_note action=forget.')
+        if (isAutoRule(hit)) throw new Error('that is an agent note: delete it with memory_manager_note action=forget.')
         const r: any = await opOf(deps.rulesOps, 'rules-remove')({ id: rawId })
         if (!r || r.ok === false) throw new Error(String((r && r.error) || 'failed to delete the memory'))
         return 'OK: deleted ' + rawId + ' (moved to the recycle bin; restore it on the Memory page).'
@@ -683,7 +683,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): MemoryToolsHandle {
         if (nextName !== '') throw new Error('nextName is for user memories; a note uses title.')
         const layer = String(a.layer || '')
         if (layer !== 'global' && layer !== 'workspace') {
-          throw new Error('that note is not a global or workspace note, so memory_remember cannot update it: ' + ref)
+          throw new Error('that note is not a global or workspace note, so memory_manager_remember cannot update it: ' + ref)
         }
         const id = String(a.id || stripNoteRef(ref))
         const text = content !== '' ? content.trim() : String(a.body || '').trim()
@@ -696,7 +696,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): MemoryToolsHandle {
         // 拿它做更新会把原文留在旧条目里，回执却说"updated"。
         const updateOp = evo!['evolution-update']
         if (typeof updateOp !== 'function') {
-          throw new Error('this host cannot edit an agent note in place. Forget it with memory_note action=forget and learn a new one, or use memory_note action=learn with the same slot.')
+          throw new Error('this host cannot edit an agent note in place. Forget it with memory_manager_note action=forget and learn a new one, or use memory_manager_note action=learn with the same slot.')
         }
         // 并发编辑保护：先读一次拿当前正文指纹，写回时带上。缺了它，模型与用户同时改
         // 同一条笔记时后保存的会静默覆盖先保存的，且没有任何 `stale` 提示 —— 界面编辑
@@ -757,7 +757,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): MemoryToolsHandle {
         if (!all || all.ok === false) throw new Error((all && all.error) || 'failed to read memories')
         const hit = (all.rules || []).find((x: any) => String(x.id) === rawId)
         if (!hit) {
-          // 与 memory_get 同一条回退：裸 id 也可能是笔记 id（`note:` 前缀可省）。
+          // 与 memory_manager_get 同一条回退：裸 id 也可能是笔记 id（`note:` 前缀可省）。
           if (evo) {
             let note: any = null
             try { note = await opOf(evo, 'evolution-read')({ id: rawId, touch: true }) } catch { note = null }
@@ -915,19 +915,19 @@ export function buildMemoryTools(deps: MemoryToolDeps): MemoryToolsHandle {
 
   // ── 自主笔记（只在开关打开时出现在工具表里）────────────────────────────────
   //
-  // 为什么不复用 `memory_remember`：那条的契约是「Only on the user's instruction」并且
+  // 为什么不复用 `memory_manager_remember`：那条的契约是「Only on the user's instruction」并且
   // 受确认门禁。自主笔记需要零摩擦：给 `save` 加一个 `auto` 参数会让同一个工具同时代表
   // 两种授权，门禁只能按参数分叉；模型传错一次就是"该问的没问"。授权边界写在工具名上。
   //
   // 与用户记忆分开的另一点是**对象**：笔记是一句话、按层（global / workspace）走；
-  // 用户记忆是多段、按场景走。读取统一走 `memory_get`，这里只保留写入与删除。
+  // 用户记忆是多段、按场景走。读取统一走 `memory_manager_get`，这里只保留写入与删除。
   // 弹卡策略：自动确认关 → 每次都问；开 → 不弹卡，由 agent 决定。生效判断在 gates 的 `autoActive`。
   if (!deps.evolutionOps || !deps.autoLearnEnabled) return { refreshNoteSchema() {} }
   const noteOps = deps.evolutionOps
 
   const noteToolDef = defineTool({
     name: PROACTIVE_MEMORY_TOOL,
-    description: 'Agent notes (autonomous memory) — one-line notes YOU decided are worth keeping across conversations: a preference, a fact, a correction of your behaviour, or a repeatable procedure. Use this for your own judgement; when the user explicitly asks you to remember something, use memory_remember instead (that is their asset, this is your cache).\n\nWrite it in one call and move on. If a call is refused, the reply names every problem at once — fix them in one retry, or drop the note and get back to the task. Do not reword the same idea repeatedly: a note that keeps failing is one the user did not need.\n\nRecord what will still hold in a different conversation, and nothing else:\n- A one-off ("this time", "for now", "next step") is not a note.\n- Something re-derivable from the code or config (dependency versions, file lists, config values) is not a note — read the file instead.\n- Say the thing itself, in words. Fragments, markup, and pure punctuation are refused.\n\nlearn: `title` (2-8 words) + `text` (<=1200 Chinese chars / 2400 letters; 1-2 clear sentences, or follow the style line in the learned-notes section); `kind` — preference / fact / correction / procedure (it sets the review interval: fact and procedure are re-checked after 30 days, preference and correction never expire, so a procedure filed as a correction stays forever); pass `slot` (a stable name) when you may update or forget it later; pass `quote` (their exact words) when you are recording something the user actually said — it is checked verbatim against this conversation, and if it does not match the note is still saved but with weaker evidence, so quote exactly when you can.\n\nEvery note shows the user a card unless they turned auto-confirm on. Check for an existing note on the same thing first (the memory read tool with kind=note lists them) — two notes saying the same thing in different words are both injected into every later conversation, and the duplicate check compares wording, not meaning. forget: `note` = id (note:...), slot, title, or the first line as it was injected. Inspect notes with the memory read tool.',
+    description: 'Agent notes (autonomous memory) — one-line notes YOU decided are worth keeping across conversations: a preference, a fact, a correction of your behaviour, or a repeatable procedure. Use this for your own judgement; when the user explicitly asks you to remember something, use memory_manager_remember instead (that is their asset, this is your cache).\n\nWrite it in one call and move on. If a call is refused, the reply names every problem at once — fix them in one retry, or drop the note and get back to the task. Do not reword the same idea repeatedly: a note that keeps failing is one the user did not need.\n\nRecord what will still hold in a different conversation, and nothing else:\n- A one-off ("this time", "for now", "next step") is not a note.\n- Something re-derivable from the code or config (dependency versions, file lists, config values) is not a note — read the file instead.\n- Say the thing itself, in words. Fragments, markup, and pure punctuation are refused.\n\nlearn: `title` (2-8 words) + `text` (<=1200 Chinese chars / 2400 letters; 1-2 clear sentences, or follow the style line in the learned-notes section); `kind` — preference / fact / correction / procedure (it sets the review interval: fact and procedure are re-checked after 30 days, preference and correction never expire, so a procedure filed as a correction stays forever); pass `slot` (a stable name) when you may update or forget it later; pass `quote` (their exact words) when you are recording something the user actually said — it is checked verbatim against this conversation, and if it does not match the note is still saved but with weaker evidence, so quote exactly when you can.\n\nEvery note shows the user a card unless they turned auto-confirm on. Check for an existing note on the same thing first (the memory read tool with kind=note lists them) — two notes saying the same thing in different words are both injected into every later conversation, and the duplicate check compares wording, not meaning. forget: `note` = id (note:...), slot, title, or the first line as it was injected. Inspect notes with the memory read tool.',
     parameters: {
       action: { type: 'string', enum: ['learn', 'forget'], required: true, description: 'learn or forget.' },
       // ── learn ──
@@ -974,7 +974,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): MemoryToolsHandle {
         if (!r || r.ok === false) {
           // 带 `note:` 前缀的一定是笔记：它只是不存在了，别再说"这像是用户记忆"。
           if (isNoteRef(ref)) {
-            throw new Error('no such agent note: ' + ref + ' (it may have been forgotten or archived). List the current notes with memory_get kind=note.')
+            throw new Error('no such agent note: ' + ref + ' (it may have been forgotten or archived). List the current notes with memory_manager_get kind=note.')
           }
           // 用户记忆 id 也是 `<scene>/<name>` 形状；零命中时明确说这不是笔记，别让模型再猜。
           if (raw.includes('/')) {
@@ -982,7 +982,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): MemoryToolsHandle {
           }
           // 走到这里说明 id / slot / title / 注入行都没命中。`evolution-forget` 的内部错
           // （`not a memory id`）对模型没有任何可执行信息 —— 它要的是"下一步做什么"。
-          throw new Error('no such agent note: "' + ref + '". Pass its id (note:<layer>/<slug>), its slot, its title, or the first line exactly as it was injected; list the current notes with memory_get kind=note to find one.')
+          throw new Error('no such agent note: "' + ref + '". Pass its id (note:<layer>/<slug>), its slot, its title, or the first line exactly as it was injected; list the current notes with memory_manager_get kind=note to find one.')
         }
         return 'OK: forgot ' + noteRefOf(String(r.id || raw)) + '. It will not be learned again for 30 days.'
       }
@@ -1008,14 +1008,14 @@ export function buildMemoryTools(deps: MemoryToolDeps): MemoryToolsHandle {
       // save 的参数串进来时（`body` / `memory`），直接指回用户记忆，
       // 别让一次完整记忆被当成一句话笔记丢掉。
       if (args && (args.body !== undefined || args.memory !== undefined)) {
-        throw new Error('those are user-memory parameters, not note parameters: for a full memory call memory_remember with content and scope=scene/global. For a note pass title and text (the same slot merges the same meaning and replaces a conflicting note).')
+        throw new Error('those are user-memory parameters, not note parameters: for a full memory call memory_manager_remember with content and scope=scene/global. For a note pass title and text (the same slot merges the same meaning and replaces a conflicting note).')
       }
 
       // ── learn（默认）──
       //
       // 先查用户记忆里是不是已经有同一条：用户自己写过的（或让模型写过的）记忆**永久生效、
       // 不衰减、不进回收站**，而笔记是会被 TTL 提醒、被合并、被归档的缓存。模型不知道这件事，
-      // 于是常见症状是——用户说「记住这个仓库用 pnpm」，模型先用 memory_remember 存了一条，
+      // 于是常见症状是——用户说「记住这个仓库用 pnpm」，模型先用 memory_manager_remember 存了一条，
       // 之后每次看到又顺手记一条笔记，页面上同一条规则出现两遍，其中一遍还会自己过期。
       //
       // 命中就**不写**，并把已有的那条 id 告诉模型：它可以去更新那条，而不是另立一条。
@@ -1028,7 +1028,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): MemoryToolsHandle {
       // 已经在用户记忆里说过的事不再记一条笔记：见 `userMemoryCovering` 的说明。
       const covered = await userMemoryCovering(text)
       if (covered !== null) {
-        return 'Already covered by the user memory ' + covered + ', so nothing was recorded. That memory is permanent and always injected — update it with memory_remember (id=' + covered + ', content=...) if the wording needs to change. Do not keep a second copy as a note.'
+        return 'Already covered by the user memory ' + covered + ', so nothing was recorded. That memory is permanent and always injected — update it with memory_manager_remember (id=' + covered + ', content=...) if the wording needs to change. Do not keep a second copy as a note.'
       }
       // 非法 TTL 不能静默落默认值：调用方会以为"30 天后重查"生效了。
       if (args && args.ttlDays !== undefined) {
@@ -1116,7 +1116,7 @@ export function buildMemoryTools(deps: MemoryToolDeps): MemoryToolsHandle {
       if (choice.choice === 'revise') {
         return 'Not saved yet. The user wants this note worded differently:\n' +
           String(choice.custom ?? '') + '\n\n' +
-          'Rewrite the note to match their wording, then call memory_note action=learn again with the revised text. The card will ask them to confirm the new version.'
+          'Rewrite the note to match their wording, then call memory_manager_note action=learn again with the revised text. The card will ask them to confirm the new version.'
       }
       if (choice.choice === 'skip') {
         return 'Not saved: the user chose not to add it. Do not save it again unless they ask.'

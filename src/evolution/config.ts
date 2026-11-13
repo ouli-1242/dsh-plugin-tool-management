@@ -169,7 +169,7 @@ export function noteStyleGuideOf(style: NoteStyle, customStyles: readonly Custom
 /**
  * 注入到自主记忆段的风格行；默认档返回空串。
  *
- * 默认档不注入：`memory_note` 的工具描述已经约束了均衡写法，再发一行只是常驻 token。
+ * 默认档不注入：`memory_manager_note` 的工具描述已经约束了均衡写法，再发一行只是常驻 token。
  * 非默认档（详细 / 极简 / 自定义）才需要把实际风格告诉模型。
  */
 export function noteStyleLineOf(style: NoteStyle, customStyles: readonly CustomNoteStyle[] = []): string {

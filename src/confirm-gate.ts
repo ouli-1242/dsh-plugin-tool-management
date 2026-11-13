@@ -28,7 +28,7 @@ export const ARG_CONDITIONAL_CONFIRM_TOOLS: ReadonlySet<string> = new Set([
   'plugin_manager_remove',
   'prompt_manager_apply',
   'mcp_manager_switch',
-  'memory_switch',
+  'memory_manager_switch',
   'skill_manager_switch',
   'subagent_manager_switch',
   'tool_manager_tools',
@@ -145,13 +145,13 @@ export function argConditionalConfirmReason(
     return `Turn MCP server「${server}」 ${action} for every conversation (global switch).`
   }
 
-  if (name === 'memory_switch' || name === 'subagent_manager_switch') {
+  if (name === 'memory_manager_switch' || name === 'subagent_manager_switch') {
     if (typeof args.enabled !== 'boolean') return null
     if (!machineWide(args, mode)) return null
     // `memory` 是改名前的参数名，兼容一次；新调用方用 `id`。
-    const key = name === 'memory_switch' ? text(args.id !== undefined ? args.id : args.memory) : text(args.name)
+    const key = name === 'memory_manager_switch' ? text(args.id !== undefined ? args.id : args.memory) : text(args.name)
     if (key === '') return null
-    const subject = name === 'memory_switch' ? 'memory' : 'persona'
+    const subject = name === 'memory_manager_switch' ? 'memory' : 'persona'
     return `Turn ${subject}「${key}」 ${args.enabled ? 'on' : 'off'} for every conversation (global switch).`
   }
 

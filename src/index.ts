@@ -2494,7 +2494,7 @@ export default {
     }
 
     /**
-     * 当前实际开启的自主记忆层。`agent` 省略时取全局设置 —— `memory_note` 的工具 schema
+     * 当前实际开启的自主记忆层。`agent` 省略时取全局设置 —— `memory_manager_note` 的工具 schema
      * 只有一份，不能按会话变；具体会话的层由执行侧再判一次。
      */
     function autoNoteLayersFor(agent?: unknown): { global: boolean; workspace: boolean } {
@@ -2674,7 +2674,7 @@ export default {
         const cfg = evolutionRuntime.effectiveSync(scopeKey, sid)
         // 注入没有独立开关：层的开关一关，这一层已有的条目也不再进上下文，只剩风格行。
         //
-        // 所以这里不能整段返回空：风格行是「以后怎么写」的写作规范，而 `memory_note` 的工具
+        // 所以这里不能整段返回空：风格行是「以后怎么写」的写作规范，而 `memory_manager_note` 的工具
         // 描述明确让模型 `follow the style line in the learned-notes section`。整段清空会让
         // 那句指引指向一个不存在的段落，模型只能退回默认档 —— 用户选了「详细 / 极简 / 自定义」，
         // 期间学的笔记却全按默认写，界面还显示风格已保存。
@@ -3009,7 +3009,7 @@ export default {
           // 委派预算"、语义是"还能不能委派"，那是错的 —— 详见 service.ts 里 `catalogDepth` 的注释。
           //   · 场景、记忆与两条自动记忆：**恒为"只在顶层"**。这几段说的是**父会话的处境**
           //     （此刻在哪个场景、这个场景下攒了什么），子代理要什么由父代理写进委派说明；
-          //     记忆本体又是几 KB 的常驻文本，子代理真有需要可以自己用 `memory_get` 取。
+          //     记忆本体又是几 KB 的常驻文本，子代理真有需要可以自己用 `memory_manager_get` 取。
           //     放它们进子会话，子代理的上下文就不再收敛为「角色 + 任务」。
           //   · 子智能体目录：人设的 `catalogDepth`（默认 1 = 只在顶层）—— 它问的是"**目录该不该
           //     注入到这么深的会话**"，与"这个域要不要注入"是两件事。目录正文也按同一判据过滤
@@ -5026,7 +5026,7 @@ export default {
     // 冷路径的句柄：op 表先于 `attachColdPath` 装配（开关打开前界面也要能查队列），
     // 所以这里先留一个可变槽，装配完再填。op 里拿到的是 getter 的**当前值**。
     let coldHandle: ReturnType<typeof attachColdPath> | null = null
-    // 设置写入后重算 `memory_note` 的 `layer` 参数；工具装配晚于 op 表，先用可变槽。
+    // 设置写入后重算 `memory_manager_note` 的 `layer` 参数；工具装配晚于 op 表，先用可变槽。
     let refreshMemoryNoteSchema: (() => void) | null = null
     // 维护扫描同样晚于 op 表创建（它依赖 episode 存储）。用同样的可变槽，
     // op 里取到的是**装配完成后**的实例，不会出现"界面上那份是空壳"。
@@ -6620,7 +6620,7 @@ export default {
         skill_manager_save: '「保存技能」',
         // write/update 并成一条 upsert，标签取中性的「保存记忆」：「写入」在改一条
         // 已有记忆时是句假话（与同一轮修 `prompt_manager_list` 的「生效中」同一个口径）。
-        memory_remember: '「保存记忆」',
+        memory_manager_remember: '「保存记忆」',
         // 场景族的唯一写工具。无条件问（不设开关）—— 它改的是"进入这个场景时会切换哪些
         // mcp / 技能 / 人设"，改错了影响的是用户切场景之后的**整个运行时环境**，而不是一次
         // 输出。与 skill / subagent 的 save 同一档（都是"以后每次都按它来"的长期资产）。
@@ -6648,7 +6648,7 @@ export default {
         // 四条 switch 只在**机器级**写入时问一次（判据在 `confirm-gate.ts`）。
         // 默认写本会话，爆炸半径只有一个对话 —— 给默认路径挂卡是纯摩擦。
         mcp_manager_switch: '「MCP 服务器开关」',
-        memory_switch: '「记忆开关」',
+        memory_manager_switch: '「记忆开关」',
         skill_manager_switch: '「技能开关」',
         subagent_manager_switch: '「人设开关」',
         // 控制面工具：开关工具表**默认不问**（只动管着这个对话的那一层，随时可退），
@@ -6746,7 +6746,7 @@ export default {
             reason: `${cur ? 'Update' : 'Add'} MCP server「${server}」— ${detail}. A stdio server is spawned by the host and the entry persists in the config.`,
           })
         }
-        if (exec.name === 'memory_remember') {
+        if (exec.name === 'memory_manager_remember') {
           // D2：模型写规则默认需确认；设置关闭后直接放行。ask 无应答者时降级为拒绝（fail-closed），
           // 不在此处做任何兜底放行。
           //

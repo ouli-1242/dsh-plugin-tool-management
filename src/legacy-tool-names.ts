@@ -16,17 +16,20 @@
 // 比原来分五条开省事。
 
 export const LEGACY_TOOL_NAME_MAP: Readonly<Record<string, string>> = Object.freeze({
-  // 记忆族：write + update + save 三条并成 `memory_remember`（多对一）。
+  // 记忆族：第一代 write + update + save 三条并成一条写入工具，第二代叫 `memory_remember`，
+  // 现在统一到 `memory_manager_remember`。所有 value 直接写最终名 —— 翻译只做单跳。
   // （开发中途曾把整族改叫 `scene_memory_manager_*`，但那个名字**从未发布**，用户侧
   // 不可能有它，因此不存在需要从它迁回来的数据。）
-  memory_manager_write: 'memory_remember',
-  memory_manager_update: 'memory_remember',
-  memory_manager_save: 'memory_remember',
-  // 清单并进 `memory_get`：用户显式关过清单的，升级后读取入口仍保持关闭。
-  // `memory_manager_read` / `_search` **不映射**：它们出厂就是关着的，映射到
-  // `memory_get` 会让升级用户的合并读取入口也变关 —— 那是唯一的发现路径。
+  memory_manager_write: 'memory_manager_remember',
+  memory_manager_update: 'memory_manager_remember',
+  memory_manager_save: 'memory_manager_remember',
+  memory_remember: 'memory_manager_remember',
+  // 清单并进读取入口：用户显式关过清单的，升级后读取入口仍保持关闭。
+  // `memory_manager_read` / `_search` **不映射**：它们出厂就是关着的，映射到读取入口
+  // 会让升级用户的合并读取入口也变关 —— 那是唯一的发现路径。
   // 旧名留在名单里只是死名，不影响任何工具。
-  memory_manager_list: 'memory_get',
+  memory_manager_list: 'memory_manager_get',
+  memory_get: 'memory_manager_get',
   mcp_manager_set_enabled: 'mcp_manager_switch',
   mcp_manager_restart: 'mcp_manager_switch',
   mcp_manager_add: 'mcp_manager_save',
@@ -36,8 +39,9 @@ export const LEGACY_TOOL_NAME_MAP: Readonly<Record<string, string>> = Object.fre
   // 「拨一个开关」六域同形 —— `_set_enabled` → `_switch`（与 `mcp_manager_set_enabled`
   // → `mcp_manager_switch` 同一条路）。**改的只是名字，参数不动**（仍是 `enabled` 布尔），
   // 所以这里是一对一翻译、不涉及语义合并。
-  memory_manager_set_enabled: 'memory_switch',
-  memory_manager_switch: 'memory_switch',
+  memory_manager_set_enabled: 'memory_manager_switch',
+  // 第一代的 `memory_manager_switch` 与现在同名、同义，不再需要映射。
+  memory_switch: 'memory_manager_switch',
   skill_manager_set_enabled: 'skill_manager_switch',
   subagent_manager_set_enabled: 'subagent_manager_switch',
   // 删除族：五个域各一条 → 合成一条 `plugin_manager_remove`（**多对一**）。
@@ -48,13 +52,15 @@ export const LEGACY_TOOL_NAME_MAP: Readonly<Record<string, string>> = Object.fre
   scene_manager_remove: 'plugin_manager_remove',
   prompt_manager_remove: 'plugin_manager_remove',
   // 自主笔记：早期分开注册的四条，以及上一版合并后的 `memory_manager_auto`，都迁到
-  // `memory_note`。盘上的 `tool-table.json` / 场景快照可能留着旧名；任意一条被关过
+  // 合并后的那条工具；第二代叫 `memory_note`，现在统一到 `memory_manager_note`。
+  // 盘上的 `tool-table.json` / 场景快照可能留着旧名；任意一条被关过
   // ⇒ 新工具也记成关过，别让旧名单变成一串永远认不出的死名。
-  memory_manager_learn: 'memory_note',
-  memory_manager_forget: 'memory_note',
-  memory_manager_organize: 'memory_note',
-  memory_manager_procedure_done: 'memory_note',
-  memory_manager_auto: 'memory_note',
+  memory_manager_learn: 'memory_manager_note',
+  memory_manager_forget: 'memory_manager_note',
+  memory_manager_organize: 'memory_manager_note',
+  memory_manager_procedure_done: 'memory_manager_note',
+  memory_manager_auto: 'memory_manager_note',
+  memory_note: 'memory_manager_note',
 })
 
 /** 旧名 → 新名；不是旧名就原样返回。 */

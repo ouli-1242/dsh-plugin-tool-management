@@ -76,7 +76,7 @@ export function buildTrashOps(rc: MemoriesOpsCtx) {
     // 回去改名。所以拒绝时**连候选名字一起回**（`params.next`）—— 弹窗才能如实写出"确认后
     // 会叫 `测（1）`"。用户点确认后带 `dedupe: true` 再来一次，这一次真的按退号的名字恢复。
     //
-    // `dedupe` 是**可选入参、缺省即旧行为**：模型工具（memory_get / memory_remember）走的是同一个 op，
+    // `dedupe` 是**可选入参、缺省即旧行为**：模型工具（memory_manager_get / memory_manager_remember）走的是同一个 op，
     // 它们依赖"撞名就拒"来决定新建还是更新，不能因为界面想要退号就改掉这条语义。
     const conflict = await locateRule(manifest.group, manifest.name)
     let name = manifest.name

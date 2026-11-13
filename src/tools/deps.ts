@@ -154,7 +154,7 @@ export const LIST_LIMIT_MAX = 100
  *
  * 为什么要有上限：返回值进上下文，而**工具表管不着这一笔**（工具表只管 schema）。
  * 模型爱「先全列出来看看」，一次就是几千 token —— 而它省下的那点（不用再调一次）
- * 远不抵。`memory_get` 的搜索与清单都带这个上限，别的 list 那几条没有 —— 同一族里
+ * 远不抵。`memory_manager_get` 的搜索与清单都带这个上限，别的 list 那几条没有 —— 同一族里
  * 只有一条有限，不一致。
  */
 export function listLimit(raw: unknown): number {
@@ -423,7 +423,7 @@ export function sessionLayerOn(deps: ToolDomainDeps): boolean {
  * 全局，拒绝它只会让模型白跑一趟。
  *
  * 加在：技能 / 人设 / 场景 / MCP 四条 `*_save`、五条 `*_remove`。
- * 不加在：`memory_remember`（它的 `scope` 指场景 / 工作区，不是会话层）、
+ * 不加在：`memory_manager_remember`（它的 `scope` 指场景 / 工作区，不是会话层）、
  * `*_manager_switch`（它们本来就按会话写，`scope` 是真的）。
  * `prompt_manager_apply` 也从清单里去掉了：它的参数表里没有
  * `scope`，守卫读不到东西 —— 模型按 schema 不可能传，这条守卫等于永不触发，留着只会

@@ -11,7 +11,7 @@
 //
 // 为什么只在压缩时复习：宿主已经把整段对话交给模型提炼成一份结构化 checkpoint，那是
 // 信息密度最高、且已经付过钱的产物。按轮次自己攒几条用户消息 / 工具结果再读一遍，既
-// 重复劳动又容易把关键话挤掉。没触发压缩就不复习 —— 热路径 `memory_note` 负责当场记。
+// 重复劳动又容易把关键话挤掉。没触发压缩就不复习 —— 热路径 `memory_manager_note` 负责当场记。
 
 import { subagentDepthOf } from '../context-inject-contract.js'
 import { captureUserTexts, isGenuineUserMessage, textOfMessage } from './evidence.js'
@@ -386,7 +386,7 @@ export function attachColdPath(
       const data = event.data || {}
       switch (type) {
         case 'user/message': {
-          // 真人原话继续喂证据缓存：热路径 `memory_note` 声明 user_explicit 时，
+          // 真人原话继续喂证据缓存：热路径 `memory_manager_note` 声明 user_explicit 时，
           // 证据门要逐字核对这句是不是用户真的说过。
           if (!isGenuineUserMessage(data)) break
           const text = textOfMessage(data).trim()

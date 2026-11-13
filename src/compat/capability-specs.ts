@@ -533,7 +533,7 @@ export const CAPABILITY_SPECS: readonly CapabilitySpec[] = [
     methods: ['prepareCall'],
     // 自主记忆的后台复习走这条路：`prepareCall(config)` 拿到 `{config, stream}`，再派发一次。
     // 两个形状缺一个，复习每次都失败（日志里只有一句 review-failed），而热路径的
-    // `memory_note` 不受影响 —— 症状是「开了自主记忆但从来不学」，界面看起来一切正常。
+    // `memory_manager_note` 不受影响 —— 症状是「开了自主记忆但从来不学」，界面看起来一切正常。
     //
     // 官方实现是 **async**（`dsh-llm` 的 provider 门面）：返回的是 Promise，同步探测看不到
     // 里面的 config / stream。那种情况只核对签名，不判形状 —— 把 Promise 当"缺 config"报，

@@ -37,7 +37,7 @@ const TARGET = [
   'src/evolution/scope-card.ts',
   'src/evolution/state.ts',
   'src/evolution/write.ts',
-  // `memory_note` / `memory_get` 的实现：两个工具的全部判定都在这一个文件里，
+  // `memory_manager_note` / `memory_manager_get` 的实现：两个工具的全部判定都在这一个文件里，
   // 一次越界读取就会把「这条属于用户记忆还是自主笔记」判错。
   'src/tools/memory.ts',
 ]

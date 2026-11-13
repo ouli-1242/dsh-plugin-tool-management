@@ -73,7 +73,7 @@ export interface CatalogEntry {
   /**
    * 注入用的正文（完整，不截断）。
    *
-   * 与 `oneLine` 分工：这条进上下文，`oneLine` 只给列表扫读与 `memory_get` 清单。
+   * 与 `oneLine` 分工：这条进上下文，`oneLine` 只给列表扫读与 `memory_manager_get` 清单。
    * 早先注入的是 `oneLine`，等于每条笔记只进前 160 字 —— 正文后半截被静默丢掉。
    */
   body: string

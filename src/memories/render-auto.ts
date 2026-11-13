@@ -93,14 +93,14 @@ export function remainingBytesOf(totalBytes: number, reservedBytes: number): num
  * 一条笔记的注入块：与手写记忆同构（`itemBlock`），正文**完整**进上下文。
  *
  * 不带类型标签，也**不带 id**：模型不需要知道内部分类；而 id（`_ws/<hash16>/<slug>`）
- * 是磁盘目录，对模型和用户都没有意义 —— 真要按引用定位，`memory_get` 已经支持
+ * 是磁盘目录，对模型和用户都没有意义 —— 真要按引用定位，`memory_manager_get` 已经支持
  * id / slot / 名称 / 注入行首句四种写法。
  *
  * 边界不再另附：正文落盘时就把 `边界：…` 拼在了末尾（`renderBody`），再附一次会让同一句话
  * 在上下文里出现两遍。
  *
  * **playbook 只放标题**：它带着十几个步骤，整段塞进每轮上下文会吃掉大半预算，而且模型在
- * 没决定执行之前根本用不上。这里只告诉它"有这么一份已验证流程"，真要执行时再 `memory_get`。
+ * 没决定执行之前根本用不上。这里只告诉它"有这么一份已验证流程"，真要执行时再 `memory_manager_get`。
  */
 export function lineOf(entry: CatalogEntry): string {
   const fallback = entry.id.slice(entry.id.lastIndexOf('/') + 1)
@@ -151,7 +151,7 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
     // 预算耗尽时也要留一句"笔记没显示"：合并块只在 `truncated` 为真时去掉「完整集合」，
     // 没有这一句，模型会以为自动笔记本来就不存在。这里不报条数 —— 这个分支还没按层过滤，
     // `input.entries.length` 会把别的层 / 已停用的条目也算进去。
-    const body = `${TRUNCATION_MARKER} Learned notes are not shown here because the hand-written memories are large; list them with memory_get (kind=note).`
+    const body = `${TRUNCATION_MARKER} Learned notes are not shown here because the hand-written memories are large; list them with memory_manager_get (kind=note).`
     // 「Learned notes」在这里指**这一类**（agent 学的笔记），不是板块名 —— 板块名随层不同，
     // 这句要在两层的渲染里都读得通。
     const text = body + '\n\n' + tailOf(AUTO_MEMORY_NOTE_PARTIAL) + '\n'
@@ -190,7 +190,7 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
   // 一条候选都没有：只发风格行。风格行是「以后怎么写」的写作规范，与「现在有没有条目可注入」
   // 无关 —— 层开关关掉时这里进不来（`autoDomainProjection` 已提前返回空），但这一层开着却
   // 一条候选都没有（刚清空、全部在等裁决）时正好落进来。吞掉风格行会让用户选的
-  // 「详细 / 极简 / 自定义」对这批笔记完全失效，而 `memory_note` 的
+  // 「详细 / 极简 / 自定义」对这批笔记完全失效，而 `memory_manager_note` 的
   // 工具描述还让模型去 `follow the style line in the learned-notes section`。
   if (candidates.length === 0) {
     if (styleLine === '') return { ...empty, budget, dropped: 0 }
@@ -211,7 +211,7 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
   // 几十到上百字节，两层叠起来就顶穿 256 KiB 的总盘。"按实际渲染块字节记"是这一层的
   // 不变量，标记也是渲染块的一部分。
   const tailBytes = Buffer.byteLength('\n' + tailOf(AUTO_MEMORY_NOTE_PARTIAL) + '\n', 'utf8')
-  const markerBytes = Buffer.byteLength('\n' + `${TRUNCATION_MARKER} ${candidates.length} more learned note(s) not shown; list them with memory_get (kind=note).` + '\n', 'utf8')
+  const markerBytes = Buffer.byteLength('\n' + `${TRUNCATION_MARKER} ${candidates.length} more learned note(s) not shown; list them with memory_manager_get (kind=note).` + '\n', 'utf8')
   const fixed = tailBytes + markerBytes
   const picked: CatalogEntry[] = []
   let spent = 0
@@ -226,7 +226,7 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
   }
 
   if (picked.length === 0) {
-    const body = `${TRUNCATION_MARKER} ${candidates.length} more learned note(s) not shown; list them with memory_get (kind=note).`
+    const body = `${TRUNCATION_MARKER} ${candidates.length} more learned note(s) not shown; list them with memory_manager_get (kind=note).`
     const text = body + '\n\n' + tailOf(AUTO_MEMORY_NOTE_PARTIAL) + '\n'
     return { ...empty, text, body, truncated: true, tokens: Math.ceil(Buffer.byteLength(text, 'utf8') / 3), budget, dropped: candidates.length }
   }
@@ -238,7 +238,7 @@ export function renderAutoLayer(layer: AutoLayer, input: AutoRenderInput): AutoR
   // 每条块的结尾已经带换行（`itemBlock` 如此），拼起来不再补 `\n`。
   const entryBlocks = picked.map(lineOf)
   const lines = [...entryBlocks]
-  if (dropped > 0) lines.push('', `${TRUNCATION_MARKER} ${dropped} more learned note(s) not shown; list them with memory_get (kind=note).\n`)
+  if (dropped > 0) lines.push('', `${TRUNCATION_MARKER} ${dropped} more learned note(s) not shown; list them with memory_manager_get (kind=note).\n`)
   // 收尾句（与用户记忆的版式一致）：条目 → 截断提示 → 空行 → 收尾句。
   // 截断时去掉「完整集合」声明，否则段尾那句与上面的省略提示自相矛盾。
   const note = dropped > 0 ? AUTO_MEMORY_NOTE_PARTIAL : AUTO_MEMORY_NOTE

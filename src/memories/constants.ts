@@ -183,7 +183,7 @@ export const ATTACHMENT_LIST_MAX = 10
  *      （`do not bring them up unless relevant`）读起来像"对内容的态度许可"，模型会把它
  *      当成"不重要就可以忽略"，而这里要说的是"可以提，只是别主动提"。
  *   ④ **完整性声明**：`this is the complete set`。这是本段唯一的**防探测**手段 —— 没有它，
- *      模型在清单里找不到某件事时会去调 `memory_get` 找更多。真发生截断时改用
+ *      模型在清单里找不到某件事时会去调 `memory_manager_get` 找更多。真发生截断时改用
  *      `SCENE_MEMORY_NOTE_PARTIAL`：否则段尾声称"全部"、其后的 `## Not injected` 又列出
  *      没进来的条目，每一条注入都在说谎。
  *
@@ -192,7 +192,7 @@ export const ATTACHMENT_LIST_MAX = 10
  * 强调手段。句式是**收束**不是引入：原版以冒号结尾引出清单，挪到条目后面后改句号收尾
  * （与其他域"说明句后置"同一版式）。
  *
- * **不点名任何工具**：模型从工具 schema 就知道 `memory_get` 存在，点名反而像在
+ * **不点名任何工具**：模型从工具 schema 就知道 `memory_manager_get` 存在，点名反而像在
  * 提示它去调。用户写的内容（记忆正文、场景名与说明）一律原样注入，一个字符都不动。
  */
 export const SCENE_MEMORY_NOTE = '**Memories for the current scene; where they conflict with what you observe or with what the user says in this conversation, trust that instead; bring them up only when relevant; this is the complete set.**'
@@ -299,7 +299,7 @@ export const fail = (code: string, error: string, params?: Record<string, string
 
 /**
  * 记忆索引文件名 / 记忆回收站目录名（hub 根下）。
- * 域叫「记忆」（工具 `memory_*`、界面「记忆」页），所以按域命名 ——
+ * 域叫「记忆」（工具 `memory_manager_*`、界面「记忆」页），所以按域命名 ——
  * 旧名 `rules-index.json` / `rules-trash/` 由 hub 的启动迁移搬过来（见 hub.ts）。
  */
 export const MEMORIES_INDEX_FILE = 'memories-index.json'

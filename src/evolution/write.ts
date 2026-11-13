@@ -696,7 +696,7 @@ export function createLearner(deps: LearnDeps) {
     const written = await state.write(st)
     if (!written.ok) return { ok: false, code: 'state-write-failed', error: written.error }
 
-    // slot 传 `nextKey`：catalog 的 `key` 是 `memory_note` 反查 slot 的依据，写 `pass.key`
+    // slot 传 `nextKey`：catalog 的 `key` 是 `memory_manager_note` 反查 slot 的依据，写 `pass.key`
     // 会与文件里的 `auto_key` 分家 —— 下次全量重建又漂回去，期间按 slot 找不到这条。
     await touchCatalog(targetId, pass, name, req, nowIso, nextStatus, nextKey)
     deps.invalidateSnapshot()

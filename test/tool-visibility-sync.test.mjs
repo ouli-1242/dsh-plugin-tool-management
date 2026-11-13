@@ -67,12 +67,12 @@ test('同步装层：载体不在时不误摘（读不到 = 不让位）', () =>
 
 test('同步装层：全局关掉的工具与载体让位并进同一层', () => {
   const { vis, agent, state } = fakeHost({
-    all: ['skill', 'skill_manager_read', 'memory_note', 'read'],
-    pluginHidden: ['memory_note'],
+    all: ['skill', 'skill_manager_read', 'memory_manager_note', 'read'],
+    pluginHidden: ['memory_manager_note'],
     carrierOf: (tools, a) => (tools.get('skill', a) !== undefined ? ['skill_manager_read'] : []),
   })
   vis.attachAgent(agent)
-  assert.deepEqual([...state.deny].sort(), ['memory_note', 'skill_manager_read'])
+  assert.deepEqual([...state.deny].sort(), ['memory_manager_note', 'skill_manager_read'])
 })
 
 test('同步装层：会话 allow 不能把载体让位那条重新放回来', async () => {
@@ -81,10 +81,10 @@ test('同步装层：会话 allow 不能把载体让位那条重新放回来', a
   // 让位判的是"官方 skill 已在场，这条只是重复"，不是可见性偏好。
   // 两段一旦判反，首轮有、第二步没，轨迹上又是一次「移除工具」。
   const { vis, agent, state } = fakeHost({
-    all: ['skill', 'skill_manager_read', 'memory_get', 'read'],
-    pluginHidden: ['skill_manager_read', 'memory_get'],
+    all: ['skill', 'skill_manager_read', 'memory_manager_get', 'read'],
+    pluginHidden: ['skill_manager_read', 'memory_manager_get'],
     carrierOf: (tools, a) => (tools.get('skill', a) !== undefined ? ['skill_manager_read'] : []),
-    overlayOf: () => ({ allow: ['skill_manager_read', 'memory_get'], deny: [] }),
+    overlayOf: () => ({ allow: ['skill_manager_read', 'memory_manager_get'], deny: [] }),
   })
   vis.attachAgent(agent)
   const syncDeny = state.deny === null ? [] : [...state.deny].sort()
@@ -96,14 +96,14 @@ test('同步装层：会话 allow 不能把载体让位那条重新放回来', a
 
 test('同步装层：载体判据返回 Promise 时跳过它，其余同步判据照装', async () => {
   const { vis, agent, state } = fakeHost({
-    all: ['skill', 'skill_manager_read', 'memory_note', 'read'],
-    pluginHidden: ['memory_note'],
+    all: ['skill', 'skill_manager_read', 'memory_manager_note', 'read'],
+    pluginHidden: ['memory_manager_note'],
     // 旧实现（异步）仍要能工作：同步段不等它，但不能连别的判据一起放弃。
     carrierOf: async () => ['skill_manager_read'],
   })
   vis.attachAgent(agent)
-  assert.deepEqual(state.deny, ['memory_note'], '同步段先装能算出来的那部分')
+  assert.deepEqual(state.deny, ['memory_manager_note'], '同步段先装能算出来的那部分')
   // 异步段随后补齐载体让位（`attachAgent` 里那条 promise 链）。
   await new Promise((r) => setTimeout(r, 20))
-  assert.deepEqual([...state.deny].sort(), ['memory_note', 'skill_manager_read'])
+  assert.deepEqual([...state.deny].sort(), ['memory_manager_note', 'skill_manager_read'])
 })

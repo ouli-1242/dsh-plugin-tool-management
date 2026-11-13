@@ -736,7 +736,7 @@ export function renderWorkspaceMemory(
   const blocks = kept.map((f) => memoryBlock(f).text)
   let body = blocks.join('')
   if (missed.length > 0) {
-    body += `\n${TRUNCATION_MARKER} ${missed.length} more workspace memory(ies) not shown; list them with memory_get.\n`
+    body += `\n${TRUNCATION_MARKER} ${missed.length} more workspace memory(ies) not shown; list them with memory_manager_get.\n`
   }
   if (body === '') return { ...empty, truncated: probe.truncated || missed.length > 0 }
   const note = missed.length > 0 || probe.truncated ? WORKSPACE_MEMORY_NOTE_PARTIAL : WORKSPACE_MEMORY_NOTE

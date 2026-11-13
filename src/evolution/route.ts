@@ -67,7 +67,7 @@ export interface RouteInput {
   /** 会话 id；拿不到时为 undefined。 */
   sessionId?: string
   /**
-   * 模型显式要求的层（`memory_note` 的 `action=learn` 里的 `layer` 参数）。
+   * 模型显式要求的层（`memory_manager_note` 的 `action=learn` 里的 `layer` 参数）。
    *
    * 它**只是"想要"**，不越过开关与环境：指定的层关着或缺身份（比如要 workspace 但没有
    * cwd）时照样改落另一层。理由：模型看不到用户关掉了哪一层；给它一个能绕过开关的参数，

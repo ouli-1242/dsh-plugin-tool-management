@@ -12,7 +12,7 @@
 // 即**字符数 / 4**；`header.tools` 里只有 name / description / parameters —— 官方的
 // `projectToolSchema` 不投影 output / execute，那几个不进请求。界面「模型工具表」那行
 // 合计与逐条 ≈tok 就是这份）：
-//   · 上一次实测（`memory_get` 合并之前）是 18 条隐藏 ≈**4,524 tok**、默认可见 6 条
+//   · 上一次实测（`memory_manager_get` 合并之前）是 18 条隐藏 ≈**4,524 tok**、默认可见 6 条
 //     ≈**1,536 tok**、全开 ≈**6,055 tok**。合并后少了一条工具、描述也换了，**没有重测** ——
 //     引用时按"旧口径"说，别当成当前工具表的实测值。
 //   · 同一批 A/B 实测净少 **4,119 / 4,197 tok**（把当时那批隐藏工具逐个打开，前后各跑两轮），
@@ -53,7 +53,7 @@ import { CONTROL_TOOL_NAME } from './deps.js'
  * learn / forget 两个行为靠 `action` 分叉；名字集中在这里，是因为
  * 「出厂隐藏名单」「跟随总开关开合」「旧名迁移」「工具注册」四处都得认同一串字符。
  */
-export const PROACTIVE_MEMORY_TOOL = 'memory_note'
+export const PROACTIVE_MEMORY_TOOL = 'memory_manager_note'
 
 /**
  * 自主笔记那条工具**只跟总开关走**，工具表盘上存过的关停名单对它无效。
@@ -116,8 +116,8 @@ export interface ToolTableSettings {
  *   · **读侧四条** —— `mcp_manager_list` / `skill_manager_list` / `prompt_manager_list` /
  *     `scene_manager_list`。会话开头注入的那几段目录已经写了当前有什么，模型不必每轮
  *     再带一份查询工具。
- *     **`memory_get` 刻意不在这份名单**：合并后的读取入口同时承担清单、搜索与正文，
- *     藏掉它等于把被截断的条目、以及 `memory_remember` 需要的 id 变成不可发现。
+ *     **`memory_manager_get` 刻意不在这份名单**：合并后的读取入口同时承担清单、搜索与正文，
+ *     藏掉它等于把被截断的条目、以及 `memory_manager_remember` 需要的 id 变成不可发现。
  *   · **切场一条** —— `scene_manager_switch`：进入 / 退出场景。
  *   · **开关四条** —— `skill` / `memory` / `subagent` 三个 `_switch`（用户：「平时使用也很少」）
  *     + `mcp_manager_switch`。启停在面板上都有同款，注入段也写着当前开着哪些。
@@ -148,7 +148,7 @@ export interface ToolTableSettings {
  * 上下文的记忆正文"在会话里查不到；`*_switch` 关掉后模型也不能再替你拨启停。三处配套改动为
  * 的就是不把模型往墙上推：目录被条数上限截断时那句「用 `X_manager_list` 查」自动退回「另有
  * N more not listed.)」（`listToolVisible`）；`mcp_manager_list` / `skill_manager_read` 里"没找到 →
- * 去调 list"那两句先问 `deps.toolVisible`；`memory_get` 的描述不再点名已关的工具。
+ * 去调 list"那两句先问 `deps.toolVisible`；`memory_manager_get` 的描述不再点名已关的工具。
  *
  * 只在**用户从没记过选择**时生效（见 index.ts 的 `toolTableSettingsFrom`：侧车文件读不出来
  * 才用这份）。已经存过盘的一律照原样，包括显式的 `hidden: []` —— 那是"我全都要"，
@@ -159,7 +159,7 @@ export const DEFAULT_HIDDEN_TOOLS: readonly string[] = Object.freeze([
   'scene_manager_switch',
   'scene_manager_save',
   'scene_manager_archive',
-  'memory_switch',
+  'memory_manager_switch',
   'mcp_manager_list',
   'mcp_manager_save',
   'mcp_manager_switch',

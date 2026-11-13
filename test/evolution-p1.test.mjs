@@ -719,7 +719,7 @@ test('自动段：同输入必须逐字节相同（否则每轮重发整段）�
 
 test('注入行：不带内部 id（流程 / playbook 也一样）', () => {
   // id 是磁盘目录（`_ws/<hash16>/<slug>`），对模型和用户都没有意义。定位靠
-  // `memory_get` 的 id / slot / 名称 / 注入行首句四种写法，后三种注入行里都有。
+  // `memory_manager_get` 的 id / slot / 名称 / 注入行首句四种写法，后三种注入行里都有。
   const proc = wsEntry({ kind: 'procedure', title: '发布流程', body: '先跑构建再打 tag', oneLine: '先跑构建再打 tag' })
   assert.equal(lineOf(proc), '- **发布流程** — 先跑构建再打 tag\n')
   assert.doesNotMatch(lineOf(proc), /_ws\/|\(id:/)
@@ -848,7 +848,7 @@ test('自动段带上非默认风格行：默认档不注入，body 只放条目
 })
 
 test('条目为空时仍发风格行：它是写作规范，不是条目注解', () => {
-  // `memory_note` 的工具描述明确让模型 `follow the style line in the learned-notes section`。
+  // `memory_manager_note` 的工具描述明确让模型 `follow the style line in the learned-notes section`。
   // 一条条目都没有时整段清空，会让那句指引指向一个不存在的段落，模型只能退回默认档：
   // 用户选了「详细 / 极简 / 自定义」，期间学的笔记却全按默认写，界面还显示风格已保存。
   const base = { entries: [], state: emptyState(), scope: {}, totalBytes: 262144, reservedBytes: 0 }

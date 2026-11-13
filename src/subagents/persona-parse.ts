@@ -3,6 +3,7 @@
 //
 // 从 subagents/service.ts 整段搬来，一行未改。这一层不认识宿主也不写文件：进来一段文本，
 // 出去一个 PersonaDoc；创建与更新走的解析口径与扫描时同一份，两处不能各写一套。
+import { translateLegacyToolName } from '../legacy-tool-names.js'
 import { decodeYamlScalar } from '../skills/frontmatter.js'
 import type { PersonaDoc, PresetToolRule } from './persona-types.js'
 
@@ -37,6 +38,23 @@ export function listOf(value: unknown): string[] | undefined {
   if (!text) return undefined
   const list = splitNameList(text).map((s) => decodeYamlScalar(s).trim()).filter(Boolean)
   return list.length ? list : undefined
+}
+
+/**
+ * 工具名名单按旧名表翻译并按新名去重。
+ *
+ * 人设文件存的是工具名，但不走 `tool-table.json` 那条迁移路（三处旧名翻译都不覆盖它）。
+ * 不翻译的话，旧的 `toolsDeny` 条目对新名字**静默失配** —— deny 失效是 fail-open，
+ * 比 allow 少一条更危险。幂等：全是现行名时原样返回。
+ */
+function translateToolNameList(names: string[] | undefined): string[] | undefined {
+  if (names === undefined) return undefined
+  const out: string[] = []
+  for (const name of names) {
+    const next = translateLegacyToolName(name)
+    if (out.indexOf(next) < 0) out.push(next)
+  }
+  return out
 }
 
 /**
@@ -75,7 +93,7 @@ export function parsePresetToolRules(frontmatter: string): Record<string, Preset
     if (!/^\s/.test(line)) break
     const m = /^\s*([A-Za-z0-9._-]+)\s*:\s*(allow|deny)\s*:\s*(.*)$/i.exec(line)
     if (!m) continue
-    const names = listOf(m[3])
+    const names = translateToolNameList(listOf(m[3]))
     // 空名单 = 不限制 = 不落盘，读到时也直接忽略，免得把"没开"读成"开了但空"。
     if (!names) continue
     rules[m[1]] = { mode: m[2].toLowerCase() === 'deny' ? 'deny' : 'allow', names }
@@ -138,9 +156,9 @@ export function parsePersona(raw: string, fallbackName: string): PersonaDoc {
     toolsByPreset = parsePresetToolRules(m[1])
     body = raw.slice(m[0].length)
   }
-  const tools = listOf(data.tools)
+  const tools = translateToolNameList(listOf(data.tools))
   // 兼容两种写法：`toolsdeny: a, b`（线上格式）与 `toolsDeny: a, b`（键名统一小写后同形）。
-  const toolsDeny = listOf(data.toolsdeny)
+  const toolsDeny = translateToolNameList(listOf(data.toolsdeny))
   const firstLine = body.split(/\r?\n/).find((l) => l.trim())?.trim() ?? ''
   const catalogDepth = parseCatalogDepth(data)
   return {
