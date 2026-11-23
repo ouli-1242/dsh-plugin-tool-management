@@ -30,7 +30,13 @@ export interface HttpRes {
 
 /** 宿主 web 服务的最小面：本插件只用到注册路由。 */
 export interface WebServerService {
-  register(route: { kind: 'exact'; path: string; handler(req: HttpReq, res: HttpRes): void }): () => void
+  register(route: {
+    kind: 'exact'
+    path: string
+    handler(req: HttpReq, res: HttpRes): void
+    /** 0.2.3 起默认 `required`；本插件显式声明 `anonymous`，由自己的 fence 统一判定。 */
+    auth?: 'anonymous' | 'required'
+  }): () => void
 }
 
 /** 注册 HTTP API 要的上下文、配置与 web 服务。 */
@@ -38,8 +44,8 @@ export interface HttpApiDeps extends
   // 访问令牌与 op 白名单：apply 里由 request-gate 的两个工厂建好，逐字段透传（类型钉回工厂出口）。
   Pick<AccessToken, 'CONFIG_TOKEN' | 'TOKEN_DISABLED' | 'TOKEN' | 'tokenMatches' | 'BOOT_ID' | 'markAccepted' | 'unmarkAccepted'>,
   Pick<OpWhitelist, 'WRITE_OPS' | 'SENSITIVE_OPS'> {
-  /** apply 的 ctx：本层只用到 `get('connection')` 与 `effect`（路由的 disposer 挂插件作用域）。 */
-  ctx: Pick<Context, 'get' | 'effect'>
+  /** apply 的 ctx：本层用到 `get('connection')`、`effect`（路由 disposer）与 `inject`（可选 connection 子服务）。 */
+  ctx: Pick<Context, 'get' | 'effect' | 'inject'>
   config?: Record<string, unknown>
   webServer: WebServerService
   /** 全部 HTTP op 的派发表 —— 传引用：装配后还会被 Object.assign 追加、被逐条重包门禁。 */
@@ -88,20 +94,29 @@ export function installHttpApi(deps: HttpApiDeps): void {
       req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
       req.on('error', reject)
     })
-    // 宿主 BrowserAuth 栅栏。宿主的鉴权**只包在它自己注册的路由上**——dsh-host-webserver
-    // 没有全局中间件，既定约定是每个注册方自己调 connection.admit(req)：
-    // 它先做 Host/Origin 栅栏（Host 必须是回环或 deployment 派生的 LAN IP 字面量，
-    // 这是 DNS rebinding 唯一伪造不了的头），再叠加 browser-session cookie 鉴权，
-    // 并交回这次请求所代表的 Peer（本路由是 exact 路由，只服务 owner Peer）。
-    // 本插件此前只查公开常量 x-dsh-plugin 与自比对（Origin.host === Host）的 "同源"，
-    // 两者都挡不住 rebind 后的网页或本机任意进程 —— 等于没鉴权。现在优先走宿主栅栏。
-    // **每次请求现取，不在注册时捕获**：`connection` 由宿主在组合期挂载，挂载顺序不保证
-    // 早于本插件的 `apply()`。捕获一次的话，晚挂载时那个 `undefined` 会永久留在闭包里 ——
-    // 栅栏此后一直停在本地判定（只查回环 Host/Origin，没有浏览器会话鉴权），兼容页那条
-    // 降级也就一直挂着，而宿主其实早就把服务挂上了。服务确实不在场时行为不变：照样退回
-    // 本地判定并上报（`fenceRejection` 里那条 `noteFenceFallback`）。
+    // 宿主 BrowserAuth 栅栏。0.2.3 起 webServer 路由默认 `auth: 'required'`，宿主会先跑
+    // authorize（Host/Origin + browser-session）；但本插件有显式访问令牌这条逃生门，令牌
+    // 正确的请求没有浏览器 cookie，走默认 required 会在进入 handler 前被宿主拦掉。所以
+    // 这条路由声明 `auth: 'anonymous'`，由插件的 fence 统一判定；宿主的 Host/Origin 检查
+    // 仍在 authorize 里生效。
+    //
+    // connection.admit() 在 0.2.3 里会读 `connection.authentication` 子服务，而 cordis 的
+    // trace 代理按**调用方 fiber 的 inject** 解析这次属性读取。顶层 inject 不能加它：非 web
+    // 组合没有 connection，加了整个插件都不会挂载。这里在可选的子 fiber 里单独 inject：
+    // 服务在就拿到绑定了该 inject 的 connection 句柄；不在就保持 undefined，退回本地判定
+    // 并上报（`fenceRejection` 里那条 `noteFenceFallback`）。子 fiber 随插件卸载一起消失，
+    // 所以清理时把句柄置空，避免闭包继续指向已释放的上下文。
+    let connectionCtx: Context | undefined
+    try {
+      deps.ctx.inject(['connection.authentication'], (inner) => {
+        connectionCtx = inner
+        inner.effect(() => () => {
+          if (connectionCtx === inner) connectionCtx = undefined
+        }, 'dsh-plugin-tool-management: connection seam')
+      })
+    } catch { /* 宿主没有这个子服务：保持本地判定 */ }
     const hostConnection = (): ConnectionSeam | undefined => {
-      try { return deps.ctx.get('connection') as ConnectionSeam | undefined }
+      try { return connectionCtx?.get('connection') as ConnectionSeam | undefined }
       catch { return undefined }
     }
     try {
@@ -110,6 +125,7 @@ export function installHttpApi(deps: HttpApiDeps): void {
       deps.ctx.effect(() => deps.webServer.register({
         kind: 'exact',
         path: '/dsh-plugin-tool-management/api',
+        auth: 'anonymous',
         handler: async (req, res) => {
           // 鉴权顺序：POST-only → 插件门禁头（防误触，不是凭证）→ 宿主栅栏
           // （Host/Origin + browser-session cookie）→ 可选访问令牌。令牌是本地工具与

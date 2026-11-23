@@ -21,6 +21,10 @@
 - **补丁方言 canary 跟随官方解析器**：`0.2.3` 起官方用 `parseEntryYaml`（YAML 1.2 core + `!!js`）读补丁，`userPatchesSchema` 已撤下；顶层数组 / 每项映射的断言不变。
 - **兼容矩阵按 `0.2.3-alpha.2` 重生成**。
 
+### 修复
+
+- **0.2.3 上 HTTP 请求栅栏不再降级**：`connection.authentication` 改为在可选子 fiber 中注入，`connection.admit()` 不再因调用方 fiber 未 inject 而抛错；路由显式 `auth: 'anonymous'`，保住访问令牌绕过宿主 cookie 鉴权的路径。
+
 ## [0.22.8] - 2026-11-12
 
 > **适配宿主 0.2.2-rc.2**
