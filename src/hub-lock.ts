@@ -29,7 +29,7 @@ const RETRY_MS = 25
 
 interface LockInfo {
   pid: number
-  /** 创建时间（人读用；存活判定看 mtime，心跳只 touch 文件）。 */
+  /** 创建时间（人读用；存活判定看 pid 是否还在）。 */
   at: number
   token: string
 }
