@@ -574,10 +574,9 @@ export function createLearner(deps: LearnDeps) {
     env: LearnEnv,
     req: LearnRequest,
   ): Promise<LearnResult | null> {
-    const slash = targetId.lastIndexOf('/')
-    if (slash <= 0) return null
-    const group = targetId.slice(0, slash)
-    const name = targetId.slice(slash + 1)
+    const split = splitId(targetId)
+    if (!split) return null
+    const { group, name } = split
     const docPath = join(notesRoot, group, name + '.md')
     let existing: string
     try {
@@ -733,10 +732,9 @@ export function createLearner(deps: LearnDeps) {
     index: any,
     opts: { allowActiveTarget: boolean },
   ): Promise<boolean> {
-    const slash = oldId.lastIndexOf('/')
-    if (slash <= 0) return false
-    const group = oldId.slice(0, slash)
-    const name = oldId.slice(slash + 1)
+    const split = splitId(oldId)
+    if (!split) return false
+    const { group, name } = split
     const docPath = join(notesRoot, group, name + '.md')
     try {
       const text = await readFile(docPath, 'utf8')
@@ -1019,11 +1017,9 @@ export function createLearner(deps: LearnDeps) {
       const read = await state.readFresh()
       if (!read.ok) return { ok: false, code: 'state-unreadable', error: read.error }
       const st = read.state
-      const slash = id.lastIndexOf('/')
-      if (slash <= 0 || slash === id.length - 1) return { ok: false, code: 'bad-id', error: `not a memory id: ${id}` }
-      const group = id.slice(0, slash)
-      const name = id.slice(slash + 1)
-      const layer = layerOfGroup(group)
+      const split = splitId(id)
+      if (!split) return { ok: false, code: 'bad-id', error: `not a memory id: ${id}` }
+      const { group, name, layer } = split
       const raw = await safeRead(join(notesRoot, group, name + '.md'))
       // 源文件可能已经不在了（重试 / 旧版迁移留下的半成品）：只要回收站已有副本，
       // 就继续把残留的索引与 catalog 清干净，而不是报 not-found 让用户卡住。
@@ -1084,10 +1080,9 @@ export function createLearner(deps: LearnDeps) {
       const read = await state.readFresh()
       if (!read.ok) return { ok: false, code: 'state-unreadable', error: read.error }
       const st = read.state
-      const slash = id.lastIndexOf('/')
-      if (slash <= 0) return { ok: false, code: 'bad-id', error: `not a memory id: ${id}` }
-      const group = id.slice(0, slash)
-      const name = id.slice(slash + 1)
+      const split = splitId(id)
+      if (!split) return { ok: false, code: 'bad-id', error: `not a memory id: ${id}` }
+      const { group, name } = split
       const docPath = join(notesRoot, group, name + '.md')
       let text: string
       try {

@@ -91,10 +91,8 @@ export function recordOpAudit(op: string, args: unknown, source: AuditSource, re
 }
 
 /** 审计流水的跨进程串行：轮转是「读全文 → 重写」，并发追加会丢掉窗口里的行。 */
-let auditLock: ReturnType<typeof createHubFileLock> | undefined
 function auditMutation<T>(task: () => Promise<T>): Promise<T> {
-  auditLock ??= createHubFileLock(hubPath(), { file: AUDIT_LOCK_FILE })
-  return auditLock.run(task)
+  return createHubFileLock(hubPath(), { file: AUDIT_LOCK_FILE }).run(task)
 }
 
 async function appendAudit(entry: AuditEntry): Promise<void> {
