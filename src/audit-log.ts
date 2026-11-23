@@ -11,11 +11,14 @@
 //      流水是附属能力，任何情况下都不能挡着真正的写操作，也不能把界面点成红的。
 //   ③ readonly 与失败/抛错的调用不记 —— 记的是「变更成功」，不是「有人试过」。
 
-import { appendFile, readFile, stat, unlink, writeFile } from 'node:fs/promises'
+import { appendFile, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { hubPath } from './hub.js'
+import { createHubFileLock } from './hub-lock.js'
 import { OP_REGISTRY, isReadCall } from './op-registry.js'
 
 const AUDIT_FILE = 'audit.jsonl'
+/** 与 `.write.lock` 分开一把：调用方可能已经持有 hub 写锁，共用会等自己。 */
+const AUDIT_LOCK_FILE = '.audit.lock'
 /** 轮转阈值：超过 512KB 保留最近 500 条。这页的本意是「最近改动」，不是无限期审计。 */
 const ROTATE_OVER_BYTES = 512 * 1024
 const ROTATE_KEEP_LINES = 500
@@ -87,15 +90,27 @@ export function recordOpAudit(op: string, args: unknown, source: AuditSource, re
   recordAudit({ ts: Date.now(), op, target: auditTargetOf(op, args), source })
 }
 
+/** 审计流水的跨进程串行：轮转是「读全文 → 重写」，并发追加会丢掉窗口里的行。 */
+let auditLock: ReturnType<typeof createHubFileLock> | undefined
+function auditMutation<T>(task: () => Promise<T>): Promise<T> {
+  auditLock ??= createHubFileLock(hubPath(), { file: AUDIT_LOCK_FILE })
+  return auditLock.run(task)
+}
+
 async function appendAudit(entry: AuditEntry): Promise<void> {
-  const abs = hubPath(AUDIT_FILE)
-  let size = 0
-  try { size = (await stat(abs)).size } catch { /* 还没有这个文件 */ }
-  if (size > ROTATE_OVER_BYTES) {
-    const kept = await tailLines(abs, ROTATE_KEEP_LINES)
-    await writeFile(abs, kept.length ? kept.join('\n') + '\n' : '', 'utf8')
-  }
-  await appendFile(abs, JSON.stringify(entry) + '\n', 'utf8')
+  await auditMutation(async () => {
+    const abs = hubPath(AUDIT_FILE)
+    let size = 0
+    try { size = (await stat(abs)).size } catch { /* 还没有这个文件 */ }
+    if (size > ROTATE_OVER_BYTES) {
+      const kept = await tailLines(abs, ROTATE_KEEP_LINES)
+      // 先写临时文件再 rename：写到一半崩溃不会把整份流水截成空文件。
+      const tmp = abs + '.rotate'
+      await writeFile(tmp, kept.length ? kept.join('\n') + '\n' : '', 'utf8')
+      await rename(tmp, abs)
+    }
+    await appendFile(abs, JSON.stringify(entry) + '\n', 'utf8')
+  })
 }
 
 /** 读末尾 n 行（文件不存在 = 空）。整份读入：这份流水被轮转压在 512KB 以内，不会失控。 */
@@ -112,16 +127,23 @@ async function tailLines(abs: string, n: number): Promise<string[]> {
  * 而不是留下一段无声的空白。
  */
 export async function clearAudit(): Promise<{ ok: true; removed: number } | { ok: false; error: string }> {
-  const abs = hubPath(AUDIT_FILE)
-  let lines = 0
-  try { lines = (await readFile(abs, 'utf8')).split('\n').filter((l) => l.trim()).length } catch { lines = 0 }
   try {
-    await unlink(abs)
-    return { ok: true, removed: lines }
+    return await auditMutation(async () => {
+      const abs = hubPath(AUDIT_FILE)
+      let lines = 0
+      try { lines = (await readFile(abs, 'utf8')).split('\n').filter((l) => l.trim()).length } catch { lines = 0 }
+      try {
+        await unlink(abs)
+        return { ok: true as const, removed: lines }
+      } catch (e) {
+        const err = e as { code?: string; message?: string }
+        if (err && err.code === 'ENOENT') return { ok: true as const, removed: 0 }   // 本来就没有 = 已经是空的
+        return { ok: false as const, error: String((err && err.message) || e) }
+      }
+    })
   } catch (e) {
-    const err = e as { code?: string; message?: string }
-    if (err && err.code === 'ENOENT') return { ok: true, removed: 0 }   // 本来就没有 = 已经是空的
-    return { ok: false, error: String((err && err.message) || e) }
+    // 等锁超时（另一个进程正在轮转）也按普通失败回执，不让 op 抛出去。
+    return { ok: false, error: String((e && (e as Error).message) || e) }
   }
 }
 

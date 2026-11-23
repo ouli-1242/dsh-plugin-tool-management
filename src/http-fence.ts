@@ -79,6 +79,19 @@ function noteFenceFallback(reason: string, threw: boolean): void {
   })
 }
 
+/**
+ * 宿主拒绝码 → 给用户看的原因。
+ *
+ * 401 与 403 是两种不同的问题（没登录 / 源不对），503 是宿主鉴权服务自己不可用 ——
+ * 把它也说成「Host/Origin 栅栏拒绝」会让用户去查一个根本没问题的头。
+ */
+function fenceErrorOf(status: number): string {
+  if (status === 401) return '未通过宿主的浏览器鉴权：请在 DSH Web GUI 内操作，或为本插件配置访问令牌（config.token / DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN）'
+  if (status === 403) return 'Host/Origin 栅栏拒绝：该请求不是发往本机地址的同源请求'
+  if (status === 503) return '宿主鉴权服务暂不可用（HTTP 503）：请稍后重试；若使用访问令牌访问，请确认令牌正确'
+  return `宿主请求栅栏拒绝（HTTP ${status}）`
+}
+
 /** 宿主的准入栅栏：优先 `connection.admit()`，退回 Host/Origin 手检。通过返回 null。 */
 export function fenceRejection(req: FenceRequest, connection?: ConnectionSeam): FenceRejection | null {
   try {
@@ -98,12 +111,7 @@ export function fenceRejection(req: FenceRequest, connection?: ConnectionSeam): 
       clearRuntimeNote('http-fence-fallback')
       if ('rejection' in admission) {
         const status = admission.rejection
-        return {
-          status,
-          error: status === 401
-            ? '未通过宿主的浏览器鉴权：请在 DSH Web GUI 内操作，或为本插件配置访问令牌（config.token / DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN）'
-            : 'Host/Origin 栅栏拒绝：该请求不是发往本机地址的同源请求',
-        }
+        return { status, error: fenceErrorOf(status) }
       }
       const principal = admission.peer?.principal
       if (principal !== undefined && principal.kind !== 'owner') {
@@ -114,12 +122,7 @@ export function fenceRejection(req: FenceRequest, connection?: ConnectionSeam): 
     const rejection = connection?.requestRejection?.(req)
     if (typeof rejection === 'number') {
       clearRuntimeNote('http-fence-fallback')
-      return {
-        status: rejection,
-        error: rejection === 401
-          ? '未通过宿主的浏览器鉴权：请在 DSH Web GUI 内操作，或为本插件配置访问令牌（config.token / DSH_PLUGIN_TOOL_MANAGEMENT_TOKEN）'
-          : 'Host/Origin 栅栏拒绝：该请求不是发往本机地址的同源请求',
-      }
+      return { status: rejection, error: fenceErrorOf(rejection) }
     }
     // 栅栏在场且未返回拒绝码 ⇒ 已通过，不再叠加本地判定（宿主的 trustedHosts
     // 部署信息这里拿不到，重复判定只会更松或更严，都不对）。

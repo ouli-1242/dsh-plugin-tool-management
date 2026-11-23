@@ -36,7 +36,6 @@
  *   node scripts/host-deps.mjs --restore     # put the originals back
  *   node scripts/host-deps.mjs --host <dir>  # pick one host's @deepseek-ai dir explicitly
  */
-import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmdirSync, symlinkSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
@@ -224,7 +223,9 @@ function main() {
     let made = false
     try {
       if (process.platform === 'win32') {
-        execFileSync('cmd', ['/c', 'mklink', '/J', entry.local, entry.remote], { stdio: 'ignore' })
+        // junction 的目标必须是绝对路径。直接建、不经过 cmd：目标带空格或 & 时不会被
+        // 命令行解析改写。
+        symlinkSync(resolve(entry.remote), entry.local, 'junction')
       } else {
         symlinkSync(entry.remote, entry.local, 'dir')
       }

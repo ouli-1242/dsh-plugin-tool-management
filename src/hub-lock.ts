@@ -4,10 +4,11 @@
 // `writeChain` 只能串行**同一进程**的写入；两个进程同时读-改-写同一份侧车时，后写的会覆盖
 // 先写的（停用表、作用域覆盖、工具表都是整份写）。这里用 hub 根下的 `.write.lock` 做第二层。
 //
-// 锁文件不常开：写入 pid / 时间 / 随机 token 后立即关闭；临界区结束时按 token 删除。持锁期间
-// 每 5 秒 touch 一次 mtime，心跳停了超过 `staleMs` 才允许别的进程抢占。这样进程崩溃留下的锁
-// 最多挡一分钟，不会永久锁死 hub。
-import { mkdir, open, readFile, stat, unlink, utimes } from 'node:fs/promises'
+// 锁文件不常开：写入 pid / 时间 / 随机 token 后立即关闭；临界区结束时按 token 删除。
+// 只有**持锁进程已经不存在**（或锁内容始终读不完整）才允许别的进程删锁重试 —— 心跳过期
+// 不等于进程死了，GC、调试器、系统休眠都能让它停上一分钟；按 mtime 抢锁会让两个进程同时
+// 进临界区。等待上限由 `timeoutMs` 兜住：真正卡死的进程只让别的进程报错，不会造成并发写。
+import { mkdir, open, readFile, stat, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
@@ -17,11 +18,11 @@ export const HUB_LOCK_FILE = '.write.lock'
 /** 等锁的上限：超过就报错，不无限挂住一次面板写入。 */
 const DEFAULT_TIMEOUT_MS = 30_000
 
-/** 没有心跳多久算死锁。必须明显大于心跳间隔，给一次长写入留余量。 */
-const DEFAULT_STALE_MS = 60_000
-
-/** 心跳间隔：touch 锁文件 mtime。 */
-const HEARTBEAT_MS = 5_000
+/**
+ * 锁文件内容读不懂时等多久再判死：`open('wx')` 成功到写完内容是极短的窗口，
+ * 在这期间删锁会误删一把即将生效的锁。
+ */
+const PARTIAL_WRITE_GRACE_MS = 5_000
 
 /** 等锁的重试间隔（带少量随机抖动，避免两个进程同步醒来反复撞）。 */
 const RETRY_MS = 25
@@ -77,15 +78,14 @@ function processAlive(pid: number): boolean {
  * 建一把 hub 文件锁。
  *
  * @param dir hub 根目录（`$DSH_HOME/tool-management`）；不存在时首次等锁会创建
- * @param options 超时与死锁阈值（测试可缩短）
+ * @param options 超时与锁文件名（不同临界区各用一把锁时靠 `file` 区分）
  */
 export function createHubFileLock(
   dir: string,
-  options: { timeoutMs?: number; staleMs?: number } = {},
+  options: { timeoutMs?: number; file?: string } = {},
 ): HubFileLock {
-  const path = join(dir, HUB_LOCK_FILE)
+  const path = join(dir, options.file ?? HUB_LOCK_FILE)
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
-  const staleMs = options.staleMs ?? DEFAULT_STALE_MS
 
   /** 尝试拿锁；拿不到返回 false，拿到后由调用方持有。 */
   async function tryAcquire(token: string): Promise<boolean> {
@@ -101,13 +101,22 @@ export function createHubFileLock(
       if ((e as { code?: string } | null)?.code !== 'EEXIST') throw e
       const seen = await readLock(path)
       if (seen === null) return false // 刚被删；下一轮重试即可
-      const age = Date.now() - seen.mtime
-      if (seen.info !== null && processAlive(seen.info.pid) && age < staleMs) return false
-      // 进程已死 / 心跳过期 / 内容读不懂：只删我们看到的那一份，避免误删别人刚建的新锁。
-      const again = await readLock(path)
-      if (again !== null && (seen.info === null || again.info?.token === seen.info.token)) {
-        await unlink(path).catch(() => undefined)
+      if (seen.info !== null) {
+        // 进程还活着就只等。pid 被系统复用只会让我们多等一轮超时，不会并发写。
+        if (processAlive(seen.info.pid)) return false
+      } else if (Date.now() - seen.mtime < PARTIAL_WRITE_GRACE_MS) {
+        return false
       }
+      // 只删我们看到的那一份，避免误删别人刚建的新锁：token 必须仍相同；两次都读不懂时
+      // 第二次也要过了宽限期（可能是新锁刚写下半截）。
+      const again = await readLock(path)
+      if (again === null) return false
+      if (seen.info !== null) {
+        if (again.info?.token !== seen.info.token) return false
+      } else if (again.info !== null || Date.now() - again.mtime < PARTIAL_WRITE_GRACE_MS) {
+        return false
+      }
+      await unlink(path).catch(() => undefined)
       return false
     }
   }
@@ -124,15 +133,9 @@ export function createHubFileLock(
         }
         await new Promise((resolve) => setTimeout(resolve, RETRY_MS + Math.floor(Math.random() * RETRY_MS)))
       }
-      const beat = setInterval(() => {
-        // 心跳失败（文件被删 / 被抢占）不打断临界区：释放时还会按 token 再确认一次。
-        void utimes(path, new Date(), new Date()).catch(() => undefined)
-      }, HEARTBEAT_MS)
-      beat.unref()
       try {
         return await fn()
       } finally {
-        clearInterval(beat)
         const seen = await readLock(path)
         if (seen?.info?.token === token) await unlink(path).catch(() => undefined)
       }
