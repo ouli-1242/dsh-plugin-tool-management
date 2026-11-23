@@ -2099,50 +2099,6 @@
                 React.createElement('span', { className: 'dsm-compat-pill ' + cls }, text))
             }))))
 
-        // 逐包版本：回答「升级后哪个官方包先变了、还在不在适配范围」。
-        // 与上面模块实体那一块分开的：那里比的是**物理文件是不是同一份**，
-        // 这里比的是**版本号与 peer 范围** —— 路径相同也可能版本已经变了（宿主原地升级）。
-        const hostPackages = (data && data.packages) || []
-        if (hostPackages.length) {
-          const driftedPackages = hostPackages.filter(function (item) { return item.versionDrift === true }).length
-          push(section(t('compat.packages'), driftedPackages > 0
-            ? t('compat.packages.hint', { count: driftedPackages })
-            : t('compat.packages.allOk'),
-            React.createElement('div', { className: 'dsm-compat-mod-list dsm-compat-cards' },
-              hostPackages.map(function (item) {
-                const known = Boolean(item.hostVersion)
-                const optionalUnknown = !known && item.optional === true
-                const outOfRange = item.inPeerRange === false
-                const drifted = item.versionDrift === true
-                const cls = optionalUnknown ? ''
-                  : outOfRange ? 'dsm-compat-pill-bad'
-                    : drifted ? 'dsm-compat-pill-warn'
-                      : known ? 'dsm-compat-pill-ok' : ''
-                const pill = optionalUnknown ? t('compat.packages.optional')
-                  : outOfRange ? t('compat.packages.out')
-                    : drifted ? t('compat.packages.changed')
-                      : known ? t('compat.packages.baseline') : t('compat.packages.unknown')
-                const detail = optionalUnknown
-                  ? t('compat.packages.optionalDetail')
-                  : item.observed === true
-                    ? t('compat.packages.detailObserved', {
-                      host: item.hostVersion || '—',
-                      baseline: item.baselineVersion || '—',
-                    })
-                    : t('compat.packages.detail', {
-                      host: item.hostVersion || '—',
-                      plugin: item.pluginVersion || '—',
-                      baseline: item.baselineVersion || '—',
-                      range: item.peerRange || '—',
-                    }) + (item.sameModule === false ? ' · ' + t('compat.packages.separate') : '')
-                return React.createElement('div', { className: 'dsm-compat-mod-row', key: item.name },
-                  React.createElement('span', { className: 'dsm-compat-name dsm-compat-mod' }, item.name),
-                  React.createElement('span', { className: 'dsm-compat-pill ' + cls }, pill),
-                  React.createElement('span', { className: 'dsm-compat-mod dsm-compat-mod-self' },
-                    React.createElement('span', { className: 'dsm-compat-label' }, t('compat.reason')), detail))
-              }))))
-        }
-
         // 裸模块解析（与上面那一块的分工：上面比的是**同一份物理模块**，这里看的是**包还在不在**）。
         //
         // 为什么分开：上面那 6 个包是插件的 peerDependency，「两份不同拷贝」那种故障只可能发生在

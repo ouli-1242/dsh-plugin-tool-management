@@ -24,6 +24,7 @@
 ### 修复
 
 - **0.2.3 上 HTTP 请求栅栏不再降级**：`connection.authentication` 改为在可选子 fiber 中注入，`connection.admit()` 不再因调用方 fiber 未 inject 而抛错；路由显式 `auth: 'anonymous'`，保住访问令牌绕过宿主 cookie 鉴权的路径。
+- **兼容页移除「宿主包版本（逐包）」区块**：每次宿主升级都会把整表标黄，即使插件已经适配；逐包版本仍保留在 `compat-status` 载荷与 doctor 里。
 
 ## [0.22.8] - 2026-11-12
 
