@@ -107,14 +107,14 @@ export function installHttpApi(deps: HttpApiDeps): void {
     // 并上报（`fenceRejection` 里那条 `noteFenceFallback`）。子 fiber 随插件卸载一起消失，
     // 所以清理时把句柄置空，避免闭包继续指向已释放的上下文。
     let connectionCtx: Context | undefined
-    try {
-      deps.ctx.inject(['connection.authentication'], (inner) => {
-        connectionCtx = inner
-        inner.effect(() => () => {
-          if (connectionCtx === inner) connectionCtx = undefined
-        }, 'dsh-plugin-tool-management: connection seam')
-      })
-    } catch { /* 宿主没有这个子服务：保持本地判定 */ }
+    // 缺这个子服务时 cordis 只是把子 fiber 挂着，不抛错；所以这里没有 try/catch ——
+    // 有的话反而会吞掉真正的装配错误。
+    deps.ctx.inject(['connection.authentication'], (inner) => {
+      connectionCtx = inner
+      inner.effect(() => () => {
+        if (connectionCtx === inner) connectionCtx = undefined
+      }, 'dsh-plugin-tool-management: connection seam')
+    })
     const hostConnection = (): ConnectionSeam | undefined => {
       try { return connectionCtx?.get('connection') as ConnectionSeam | undefined }
       catch { return undefined }

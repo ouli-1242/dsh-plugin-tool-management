@@ -123,7 +123,7 @@ Six operation domains, **23 model tools**: list, read, create, update, delete, t
 More than a version number:
 
 - **Checks**: host version, the plugin build actually loaded this run, and whether each action is native / adapted / unavailable, with reasons. Items whose names can be checked but whose timing or rendering cannot are listed under “not automatically verifiable”. If an upgrade quietly breaks something, it shows up here; the “Re-check” button re-runs the probe in place.
-- **Upgrade diff**: per-package versions for cordis, the 11 peers and 15 runtime-only official packages against the verified baseline (out-of-range peers become blockers), plus canaries for event names, session-directory layout, patch dialect, MCP config keys and tool argument schemas, prompt section ordering, client UI slots and official skill assets.
+- **Upgrade diff**: canaries for event names, session-directory layout, patch dialect, MCP config keys and tool argument schemas, prompt section ordering, client UI slots and official skill assets; out-of-range packages become blockers (per-package versions remain available in `compat-status` and the doctor).
 - **Access token**: set / disable / change / delete; writes and plaintext secrets go through it.
 - **Scope**: all global / per workspace / per conversation.
 - **Injection**: switches for seven domains (global and workspace memory share one switch in the UI), minimal-preset fallback, catalog caps for skills / MCP / subagents (overflow folds into a one-line count; per-entry description length is configurable too), the two slash-menu entries, sidebar entry.
@@ -161,7 +161,7 @@ More than a version number:
 | No panel after installing               | Hard-refresh the browser; if that fails, restart DSH.                                                                                                    |
 | The model cannot call a tool            | Host page → “Model tools”, make sure the right conversation / workspace is selected (18 tools are off by default). The panel and scripts are unaffected. |
 | Actions unavailable after a DSH upgrade | Check the reason on the Host page; run `node scripts/doctor.mjs`, then `node scripts/host-deps.mjs --fix`.                                               |
-| Version mismatch                        | Supports DSH **0.2.3** only (`>=0.2.3-alpha.2 <0.2.4`); for `0.2.2` install 0.22.8, and install 0.21.x for older hosts. Cross-generation upgrades wait for the plugin to catch up. |
+| Version mismatch                        | Supports DSH **0.2.3** only (`>=0.2.3-alpha.2 <0.2.4`); for `0.2.2` install 0.22.8, for `0.2.2-rc.1` install 0.22.5, and install 0.21.x for older hosts. Cross-generation upgrades wait for the plugin to catch up. |
 | Duplicate MCP tab                       | Remove the old loader line from `cordis.patch.yml` and restart.                                                                                          |
 | DSH won't start after a bad edit        | Restore the newest `cordis.patch.yml.*.bak-*` from `~/.dsh/tool-management/backups/`.                                                                    |
 

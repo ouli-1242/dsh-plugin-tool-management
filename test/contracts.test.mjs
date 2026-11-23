@@ -2115,8 +2115,8 @@ test('备份名与 peer range：两代时间戳都认、两份范围不漂移', 
 })
 
 test('逐包版本基准覆盖全部 dsh peer，且范围与 package.json 同源', () => {
-  // 兼容页的「宿主包版本」表按这份基准逐包比对。少了某个 peer，升级后恰好变的是它时
-  // 页面会漏报；范围写错则会把「仍在范围内」报成越界（反之更糟）。
+  // `compat-status` 载荷与 doctor 按这份基准逐包比对。少了某个 peer，升级后恰好变的是它时
+  // 会漏报；范围写错则会把「仍在范围内」报成越界（反之更糟）。
   const pkg = JSON.parse(readFileSync(join(import.meta.dirname, '..', 'package.json'), 'utf8'))
   const peerRanges = pkg.peerDependencies
   const dshPeers = Object.keys(peerRanges).filter((name) => name.startsWith('@deepseek-ai/dsh-'))
