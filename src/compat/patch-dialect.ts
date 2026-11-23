@@ -1,15 +1,15 @@
 // 官方补丁方言（`cordis.patch.yml`）的**只读复刻** —— 写入宿主配置前的最后一道校验。
 //
 // 为什么需要它：本插件 19 个调用面都在**文本级**改宿主的补丁文件（插块 / 删块 / 换行），
-// 而官方解析这份文件用的是 js-yaml + 自定义 `!!js` 标签（`dsh-app-boot/lib/index.js:17-31`），
-// 并且把「顶层必须是数组」「每项必须是映射」写成显式断言（同文件 `parsePatchList`，:1196-1200）。
-// 解析失败 = DSH **下次启动直接起不来**（`CHANGELOG.md` 里记过这次事故）。三条写入路径
-// （`profiles/<名>/cordis.patch.yml`、`~/.dsh/cordis.patch.yml`、bundle 的 `cordis.patch.yml`）
-// 走的是同一份方言（前者 `loadOverlayPatches`、后者 `loadOptionalPatches` → `parsePatchList`；
-// `userPatchesSchema === entryListSchema`，实测于 dsh-app-boot 0.1.5-rc.2，0.1.7-rc.2 复核未变）。
+// 而官方解析这份文件用的是 `@deepseek-ai/cordis-plugin-include` 的 `parseEntryYaml`
+// （YAML 1.2 core + 自定义 `!!js` 标签），并把「顶层必须是数组」「每项必须是映射」写成
+// 显式断言（`parsePatchList`）。解析失败 = DSH **下次启动直接起不来**（`CHANGELOG.md` 里
+// 记过这次事故）。三条写入路径（`profiles/<名>/cordis.patch.yml`、`~/.dsh/cordis.patch.yml`、
+// bundle 的 `cordis.patch.yml`）走的是同一份方言（前者 `loadOverlayPatches`、后者
+// `loadOptionalPatches` → `parsePatchList`）。
 //
-// 官方**没有**导出这份 schema（导出清单见同文件 :1575，无 `entryListSchema`），所以只能复刻。
-// 复刻**必然会过期**（官方加方言 / 换 js-yaml 大版本），因此判定策略是**非对称**的：
+// 官方不导出这份 schema，所以只能复刻；本插件的复刻用自带的 js-yaml，覆盖插件自己写出的
+// 简单方言。复刻**必然会过期**（官方换解析器 / 加方言），因此判定策略是**非对称**的：
 //   · 改前能解析、改后被我们改成不能解析 → 是我们的改动弄坏了它 → 拒绝写入（原文件与备份不动）；
 //   · 改前本来就解析不过 → 说明复刻过期，不是我们的错 → 照写 + 上报，绝不拦；
 //   · 依赖（js-yaml）不在 → 跳过校验 + 上报。
@@ -21,7 +21,7 @@
 
 import { clearRuntimeNote, noteRuntime } from './runtime-notes.js'
 
-/** 官方 `.js` 标签名（逐字取自 dsh-app-boot/lib/index.js:17）。 */
+/** 官方 `parseEntryYaml` 的 `!!js` 标签名。 */
 const JS_EXPR_TAG = 'tag:yaml.org,2002:js'
 
 /** 官方 `isJsExpr`（cordis-plugin-loader/lib/index.js:302-304）的等价物。 */
@@ -85,8 +85,9 @@ const schemas = new WeakMap<YamlDialectModule, unknown>()
 function schemaOf(yaml: YamlDialectModule): unknown {
   const cached = schemas.get(yaml)
   if (cached !== undefined) return cached
-  // 与官方逐字等价的选项对象（dsh-app-boot/lib/index.js:17-23）：load 只用到 resolve /
-  // construct；predicate / represent 属于 dump 方向，复刻它们是让这份定义与官方对齐。
+  // 按官方方言声明 `!!js` 标量：load 只用到 resolve / construct；predicate / represent
+  // 属于 dump 方向，复刻它们是让这份定义与官方对齐。js-yaml 的 JSON_SCHEMA 与官方 YAML 1.2
+  // core 在插件写出的结构上一致，边角差异由非对称策略兜住。
   const exprType = new yaml.Type(JS_EXPR_TAG, {
     kind: 'scalar',
     resolve: (data: unknown) => typeof data === 'string',
@@ -113,7 +114,7 @@ export function judgePatchText(yaml: YamlDialectModule, content: string): PatchV
   } catch (error) {
     return { status: 'unparseable', detail: messageOf(error) }
   }
-  // 官方 parsePatchList 的两条显式断言：顶层数组（:1199）、每项是映射（:1200）。
+  // 官方 parsePatchList 的两条显式断言：顶层数组、每项是映射。
   // 空文件（含只有空白的文件）在这里是 undefined → 判「解析不过」—— 与官方一致：
   // 文件**不存在**官方容忍（`ENOENT` → 没有这一层），文件**在但空**官方是抛错的。
   if (!Array.isArray(parsed)) {
@@ -162,8 +163,8 @@ let depError = ''
 async function loadDialect(): Promise<YamlDialectModule | null> {
   if (dialect !== undefined) return dialect
   try {
-    // 与宿主实装同一份 js-yaml（本机实测 4.3.2）。只在写补丁时加载：插件加载期不碰它，
-    // 装不上也绝不因此让插件挂掉。
+    // 插件自带的 js-yaml；宿主 0.2.3 起改用 `yaml` 的 parseEntryYaml，这里只求覆盖插件
+    // 自己写出的方言。只在写补丁时加载：插件加载期不碰它，装不上也绝不因此让插件挂掉。
     dialect = (await import('js-yaml')) as unknown as YamlDialectModule
   } catch (error) {
     dialect = null

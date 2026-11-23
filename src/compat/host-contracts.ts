@@ -180,7 +180,7 @@ export const HOST_BEHAVIOR_CONTRACTS: readonly HostModuleContract[] = [
     impact: '插件写出的补丁可能让 DSH 下次启动失败',
     markers: [
       { needle: 'parsePatchList', why: '补丁列表解析器（顶层数组 / 每项映射的断言在它里面）' },
-      { needle: 'userPatchesSchema', why: '用户补丁条目的 schema' },
+      { needle: 'parseEntryYaml', why: '补丁 YAML 方言解析器（YAML 1.2 core + !!js）' },
       { needle: 'loadOverlayPatches', why: 'profile 补丁文件的加载入口' },
       { needle: 'loadOptionalPatches', why: 'bundle 补丁文件的加载入口' },
       { needle: 'tag:yaml.org,2002:js', why: '补丁里的 !!js 表达式标签' },
