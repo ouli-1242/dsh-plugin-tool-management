@@ -254,7 +254,7 @@ export const HOST_PACKAGE_BASELINES: readonly HostPackageBaseline[] = [
     baselineVersion: VERIFIED_HOST_VERSION,
     observed: true as const,
   })),
-  // LibreOffice Kit 跟着宿主运行时走，版本号与 DSH 不同步（0.2.x 一档对应 0.2.2 这一代）。
+  // LibreOffice Kit 跟着宿主运行时走，版本号与 DSH 不同步（当前宿主这一代对应 0.2.3）。
   { name: '@deepseek-ai/libreoffice-kit', peerRange: null, baselineVersion: '0.2.3', observed: true },
 ]
 

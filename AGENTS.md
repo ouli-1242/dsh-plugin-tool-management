@@ -105,7 +105,7 @@
 
 - **只适配一代宿主**。`VERIFIED_HOST_VERSION`（`src/compat/host-roots.ts`）是验证基准，`EXPECTED_PEER_RANGE`（`src/compat/probe.ts`）是与之同代的安装期范围。
 - **三处同源**：同一个范围字符串 = `EXPECTED_PEER_RANGE` = `package.json` 的 `engines.dsh` = 全部 11 个 `@deepseek-ai/dsh-*` 的 peer 范围。`test/contracts.test.mjs` 钉住这条关系。不许用 `^`。
-- **预发布只在同元组内匹配**：官方全程走 `x.y.z-rc.N`，范围要逐段写。同元组内的 rc（如 `0.2.2-rc.2`）被一个分支天然覆盖，追加同代 rc 不必改范围；跨元组（如 `0.2.3-rc.1`）才需要新增 `||` 分支。
+- **预发布只在同元组内匹配**：官方预发布走 `x.y.z-alpha.N` / `x.y.z-rc.N`，范围要逐段写。同元组内的预发布（如 `0.2.3-alpha.2`）被一个分支天然覆盖，追加同代 alpha / rc 不必改范围；跨元组（如 `0.2.4-alpha.1`）才需要新增 `||` 分支。
 - **版本比较分两种语义**：装期判定（`scripts/compat-matrix.mjs` 的 `inRange`、`src/compat/probe.ts` 的 peer 范围判定）用 npm 默认语义 —— 另立一套会与真实安装结果对不上；`src/update-check.ts` 的 `pickBestCompatible` 用 `includePrerelease: true` —— 那里比的是候选插件版本自己的 `engines.dsh`，跨元组要比得过。
 - **目标态尚未实现**：`package.json` 还没有 `dsh.verifiedHostVersions` 清单字段，`VERIFIED_HOST_VERSION` 仍是单值。清单制的设计在 `docs/HOST-ADAPT.md` 第三节，那是待迁移项、不是现行规则。
 - **更新检查的约束**写在 `src/update-check.ts` 的源码头注释里，改那块先读它 —— 别拿本文件当它的真相。
