@@ -75,6 +75,11 @@
       const [toolTableBusy, setToolTableBusy] = React.useState(false)
       // 会话锁 / 写失败的原因（不静默失败：用户得知道为什么勾了没保存）。
       const [toolTableError, setToolTableError] = React.useState(null)
+      // 工具表回包的作用域校验：切对话后，上一个作用域的慢响应不能写进这一屏。
+      // 读请求用自增序号作废；保存请求只看发起时的作用域是否仍是当前作用域。
+      const toolTableSeq = React.useRef(0)
+      const toolTableScopeRef = React.useRef(scopeSessionId)
+      toolTableScopeRef.current = scopeSessionId
       // 侧车损坏时的「修复」二次确认（与作用域条那颗同一条口径：第一次只切到确认）。
       const [toolTableRepairArmed, setToolTableRepairArmed] = React.useState(false)
       // 「方案」弹窗：null = 未打开。`mode:'save'` 给当前这套勾选起名存下来；
@@ -484,9 +489,12 @@
       const loadToolTable = function (alive) {
         // 全局层不带 sessionId（老行为）；会话层读这一对话生效的整份名单。
         const sid = scopeSessionId
+        const seq = ++toolTableSeq.current
         apiCall('tool-table', sid ? { sessionId: sid } : {})
           .then(function (r) {
-            if (alive === false) return
+            // 切层后旧请求仍可能在途：序号或作用域对不上就丢弃，否则会拿上一层的名单
+            // 覆盖这一层（勾选框看起来切了，实际是另一个对话的设置）。
+            if (alive === false || seq !== toolTableSeq.current || sid !== toolTableScopeRef.current) return
             if (r && r.ok) { applyToolTable(r, alive); setToolTableError(null) }
           })
           .catch(function () { /* 读不到 → 不渲染这一节 */ })
@@ -501,16 +509,21 @@
        */
       const saveToolTable = function (names) {
         if (!toolTable || toolTableBusy || scopeSessionLocked) return
+        const sid = scopeSessionId
+        // 界面这一份不属于当前层：说明上一个作用域的迟到回包刚覆盖过它。此时按它保存
+        // 会把 A 对话的勾选写进 B 对话 —— 先重拉，让用户看到的和写下去的是同一份。
+        if (sid && toolTable.sessionId && toolTable.sessionId !== sid) { loadToolTable(true); return }
         setToolTableBusy(true)
         setToolTableError(null)
         const payload = { set: true, hidden: names.slice() }
-        if (scopeSessionId) payload.sessionId = scopeSessionId
+        if (sid) payload.sessionId = sid
         apiCall('tool-table', payload)
           .then(function (r) {
+            if (sid !== toolTableScopeRef.current) return
             if (r && r.ok && r.report) {
               setToolTable(toolTableFrom(r, names))
               // 会话层的工具表也是"这一层的覆盖"：顶部下拉的条数要跟着变。
-              if (scopeSessionId) refreshScope()
+              if (sid) refreshScope()
             } else {
               setToolTableError(r && r.error ? String(r.error) : t('compat.tools.saveFailed'))
               loadToolTable(true)
@@ -519,6 +532,7 @@
             loadFeatures(true)
           })
           .catch(function () {
+            if (sid !== toolTableScopeRef.current) return
             setToolTableError(t('compat.tools.saveFailed'))
             loadToolTable(true)
           })
@@ -661,6 +675,8 @@
         lastToolScope.current = toolScopeSig
         setToolTable(null)
         setToolTableError(null)
+        // 上一层的保存可能还在路上：它的回包会被作用域校验丢掉，忙碌标记不能跟着卡住。
+        setToolTableBusy(false)
         loadToolTable(true)
       }, [toolScopeSig])
       // 总开关在记忆页，工具表在这页：拨完开关这一屏里两处不能一个开一个关。
@@ -743,7 +759,9 @@
         const next = Object.assign({}, slash, patch)
         setSlash(next)
         setSaveError(null)
-        apiCall('slash-settings', Object.assign({ set: true }, next))
+        // 只提交本次改的字段：服务端按“存在的字段”合并，整份快照会把另一个开关在
+        // 本页加载之后被别人改过的新值盖回去。
+        apiCall('slash-settings', Object.assign({ set: true }, patch))
           .then(function (r) {
             if (r && r.ok === false) {
               setSaveError(r.error || t('compat.save.failed'))
@@ -2465,39 +2483,56 @@
       }
       const openBackupClean = function () {
         setBackupClean({ files: null, delByLevel: {}, confirming: false, loading: true })
+        // 弹窗可能在请求返回前被关掉：函数式更新看到 null 就保持关闭，不再把它重新打开。
         apiCall('backups-list', {})
           .then(function (r) {
-            if (!r || !r.ok) { setBackupClean({ files: [], delByLevel: {}, confirming: false, error: (r && r.error) || t('compat.backups.loadFailed') }); return }
-            setBackupClean({ files: r.files || [], delByLevel: defaultDelByLevel(r.files || []), confirming: false })
+            setBackupClean(function (cur) {
+              if (!cur) return cur
+              if (!r || !r.ok) return { files: [], delByLevel: {}, confirming: false, error: (r && r.error) || t('compat.backups.loadFailed') }
+              return { files: r.files || [], delByLevel: defaultDelByLevel(r.files || []), confirming: false }
+            })
           })
-          .catch(function (e) { setBackupClean({ files: [], delByLevel: {}, confirming: false, error: errMsg(e) }) })
+          .catch(function (e) {
+            setBackupClean(function (cur) { return cur ? { files: [], delByLevel: {}, confirming: false, error: errMsg(e) } : cur })
+          })
       }
       /**
        * 真正落盘删。
        *
-       * @param patch 与当前状态合并的额外字段。**必须**由调用方把 `confirming: false` 传进来：
-       *   下面每次 setBackupClean 都从闭包快照派发，两次调用会把第一步写下的
-       *   `confirming: true` 又盖回去 —— 按了「确认永久删除」却还停在确认态。
+       * 异步回包一律走函数式更新：弹窗在这期间被关掉（`null`）时保持关闭，
+       * 否则迟到回包会把用户刚关掉的弹窗重新打开。
+       *
+       * @param patch 与当前状态合并的额外字段。
        */
       const doBackupClean = function (patch) {
         if (!backupClean) return
         const delByLevel = backupClean.delByLevel || {}
-        setBackupClean(Object.assign({}, backupClean, { busy: true, confirming: false }, patch || {}))
+        setBackupClean(function (cur) {
+          return cur ? Object.assign({}, cur, { busy: true, confirming: false }, patch || {}) : cur
+        })
         apiCall('backups-clean', { del: delByLevel })
           .then(function (r) {
             if (!r || !r.ok) {
-              setBackupClean(Object.assign({}, backupClean, { busy: false, confirming: false, error: (r && r.error) || t('compat.backups.cleanFailed') }))
+              setBackupClean(function (cur) {
+                return cur ? Object.assign({}, cur, { busy: false, confirming: false, error: (r && r.error) || t('compat.backups.cleanFailed') }) : cur
+              })
               return
             }
             // 失败原因（文件被占用等）由界面按当前语言拼：宿主只回结构化字段，
             // 回中文串会让英文界面原样露出中文（与 compat-status 的 summary 同一条纪律）。
-            setBackupClean(Object.assign({}, backupClean, {
-              busy: false, confirming: false, removed: r.removed || 0, kept: r.kept || 0,
-              failedCount: r.failedCount || 0, failedNames: r.failedNames || [], files: [],
-            }))
+            setBackupClean(function (cur) {
+              return cur ? Object.assign({}, cur, {
+                busy: false, confirming: false, removed: r.removed || 0, kept: r.kept || 0,
+                failedCount: r.failedCount || 0, failedNames: r.failedNames || [], files: [],
+              }) : cur
+            })
             loadBackups(true)
           })
-          .catch(function (e) { setBackupClean(Object.assign({}, backupClean, { busy: false, confirming: false, error: errMsg(e) })) })
+          .catch(function (e) {
+            setBackupClean(function (cur) {
+              return cur ? Object.assign({}, cur, { busy: false, confirming: false, error: errMsg(e) }) : cur
+            })
+          })
       }
       let backupModal = null
       if (backupClean) {

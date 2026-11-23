@@ -594,10 +594,24 @@
         // 旧键一律清掉：没有 bootId 就无从判断归属，留着只会让"重启要重填"失效。
         try { for (const legacy of LEGACY_TOKEN_KEYS) window.localStorage.removeItem(legacy) } catch (e) { /* ignore */ }
         return apiCall('token-status', {}, true).then(function (r) {
-          BOOT_ID = (r && r.ok && r.bootId) ? String(r.bootId) : ''
-          if (stored && BOOT_ID && stored.bootId === BOOT_ID) TOKEN = stored.token
+          const bootId = (r && r.ok && r.bootId) ? String(r.bootId) : ''
+          if (bootId === '') {
+            // 状态没读到 ≠ 令牌已过期：本次不启用它（无法确认属于这次启动），但也**不删**
+            // 本地存储 —— 一次读失败就让用户重填令牌是不可接受的。清掉缓存，下一次
+            // apiCall 会重新引导，读到 bootId 后再决定用或删。
+            BOOT_ID = ''
+            TOKEN = ''
+            tokenBootstrap = null
+            return
+          }
+          BOOT_ID = bootId
+          if (stored && stored.bootId === BOOT_ID) TOKEN = stored.token
           else if (stored) { TOKEN = ''; writeStoredToken('', '') }
-        }).catch(function () { TOKEN = '' })
+        }).catch(function () {
+          BOOT_ID = ''
+          TOKEN = ''
+          tokenBootstrap = null
+        })
       })()
       return tokenBootstrap
     }
