@@ -2112,7 +2112,10 @@ export default {
     // ---------- 轻量子智能体----------
     // 人设 = $DSH_HOME/tool-management/subagents/<name>.md；运行走官方 ctx.subagents.start（spawn provider）。
     // stateDir 与 rules 共用同一个覆盖键（测试注入一致）；子智能体开关存 <stateDir>/subagents-index.json。
-    const subagentService = createSubagentService(ctx, { stateDir: String((config as { memoriesStateDir?: unknown } | undefined)?.memoriesStateDir || '') })
+    const subagentService = createSubagentService(ctx, {
+      stateDir: String((config as { memoriesStateDir?: unknown } | undefined)?.memoriesStateDir || ''),
+      withWriteLock,
+    })
     /** 某个 agent 生效的场景（含基线那一份）：string = 钉住，null = 钉住没有，undefined = 跟随全局。 */
     const sceneOverrideOfAgent = (agent: unknown): string | null | undefined => {
       const sessionId = scopeKeyForAgent(agent)

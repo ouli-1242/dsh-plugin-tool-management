@@ -90,11 +90,17 @@ async function relocateLegacyPersonas(dir: string): Promise<void> {
 }
 
 /** 人设域服务门面：人设发现（TTL 扫描）与委派入口。 */
-export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; stateDir?: string }): SubagentService {
+export function createSubagentService(ctx: any, opts?: {
+  subagentsDir?: string
+  stateDir?: string
+  /** hub 级跨进程写锁；缺席时只用本进程的串行队列（测试 / 独立使用）。 */
+  withWriteLock?: <T>(task: () => Promise<T>) => Promise<T>
+}): SubagentService {
   const dir = opts?.subagentsDir || defaultPersonasDir()
   const stateDir = opts?.stateDir && opts.stateDir.trim() !== '' ? opts.stateDir : join(resolveDshHome(), 'tool-management')
   const stateFile = join(stateDir, 'subagents-index.json')
   const req = createRequire(import.meta.url)
+  const withWriteLock = opts?.withWriteLock ?? (<T>(task: () => Promise<T>) => task())
 
   let cache: { at: number; value: PersonaDoc[] } | null = null
 
@@ -491,9 +497,13 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
   }
   // 写 op 统一进串行队列（理由见上方 mutationQueue 的说明）。放在这里统一包、而不是逐个手写：
   // 以后新增写 op 只改 writeOps 一处，不会漏掉。
+  //
+  // 锁序是「hub 锁 → 进程内队列」：反过来的话，本进程占着队列等另一个进程释放 hub 锁，
+  // 而对方可能正等本进程已排队的写 —— 两边都动不了。hub 锁外层也不会让队列失去意义：
+  // 同一进程的写本来就在 `writeChain` 里排着。
   for (const name of writeOps) {
     const fn = ops[name]
-    if (typeof fn === 'function') ops[name] = (args: any) => enqueueMutation(() => fn(args))
+    if (typeof fn === 'function') ops[name] = (args: any) => withWriteLock(() => enqueueMutation(() => fn(args)))
   }
   const enabledStore = {
     /** 指定名单里当前被停用的（进入模式拍快照用：只记将被启用的行，退出时精确停回）。 */
@@ -517,7 +527,7 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
     /** 批量启停；只碰给出的名字，人设已不存在的跳过（别把悬空名写进集合）。
      *  同样走写队列：它由场景档案引擎直接调用（不经 op 表），不排队就会与开关 op 互相覆盖。 */
     async setEnabled(names: string[], enabled: boolean): Promise<void> {
-      await enqueueMutation(async () => {
+      await withWriteLock(() => enqueueMutation(async () => {
         const docs = await list()
         const set = await readEnabled()
         const base = (set === null ? docs.map((d) => d.name) : set.slice()).filter((n) => docs.some((d) => d.name === n))
@@ -532,7 +542,7 @@ export function createSubagentService(ctx: any, opts?: { subagentsDir?: string; 
           await writeEnabled(base)
           cache = null
         }
-      })
+      }))
     },
   }
   return { list, runSerial, ops, enabledStore, writeOps }
