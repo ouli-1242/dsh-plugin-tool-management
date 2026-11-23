@@ -18,6 +18,7 @@ import { isInjectableStatus } from '../memories/catalog.js'
 import { tierOf } from '../evolution/state.js'
 import { AUTO_KINDS } from '../evolution/gates.js'
 import { workspaceCwdOfScopeKey, workspaceMemoryKeyOf } from '../scope/workspace-key.js'
+import { isValidTrashId } from '../hub.js'
 
 /**
  * 工作区显示名：取作用域键（`ws:<路径>`）的最后一段。
@@ -644,6 +645,8 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
       try {
         const trashId = String(args?.trashId ?? '')
         if (trashId === '') return { ok: false, error: 'missing trashId', code: 'bad-args' }
+        // 回收站目录名只由本插件生成：白名单之外的 id 一律拒，别让它拼出回收站根之外的路径。
+        if (!isValidTrashId(trashId)) return { ok: false, error: 'invalid trashId', code: 'bad-args' }
         const result = await learner.restoreFromTrash(trashId)
         if (result && result.ok) runtime.invalidate()
         return result
@@ -658,6 +661,7 @@ export function buildEvolutionOps(deps: EvolutionOpDeps): Record<string, (args: 
       try {
         const trashId = String(args?.trashId ?? '')
         if (trashId === '') return { ok: false, error: 'missing trashId', code: 'bad-args' }
+        if (!isValidTrashId(trashId)) return { ok: false, error: 'invalid trashId', code: 'bad-args' }
         const result = await learner.purgeTrash(trashId)
         if (result && result.ok) runtime.invalidate()
         return result

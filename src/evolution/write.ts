@@ -920,13 +920,9 @@ export function createLearner(deps: LearnDeps) {
       const read = await state.readFresh()
       if (!read.ok) return { ok: false, code: 'state-unreadable', error: read.error }
       const st = read.state
-      const slash = id.lastIndexOf('/')
-      // 结尾的空文件名也按非法 id 拒掉：`join(root, 'global', '.md')` 读的是另一个路径，
-      // 找不到会报 not-found，用户拿到的错误与真实原因对不上。
-      if (slash <= 0 || slash === id.length - 1) return { ok: false, code: 'bad-id', error: `not a memory id: ${id}` }
-      const group = id.slice(0, slash)
-      const name = id.slice(slash + 1)
-      const layer = layerOfGroup(group)
+      const split = splitId(id)
+      if (!split) return { ok: false, code: 'bad-id', error: `not a memory id: ${id}` }
+      const { group, name, layer } = split
       const entry = st.entries[id]
       const docPath = join(notesRoot, group, name + '.md')
       const raw = await safeRead(docPath)
@@ -2067,12 +2063,16 @@ export const isLayerGroup = (group: string): boolean => layerOfGroup(group) !== 
  *
  * `id` 用最后一个 `/` 切开：场景名里不会有 `/`（`isValidGroupPath` 挡了），而保留段的组
  * 是 `_ws/<hash16>` 这种**带斜杠的组名**，所以只能按"最后一段是文件名"来分。
+ *
+ * id 来自模型工具与界面参数，两段都必须按路径段校验：`global/../../x` 会拼到笔记根之外，
+ * 读侧泄漏任意 `.md`、写侧覆盖任意文件。
  */
 function splitId(id: string): { group: string; name: string; layer: MemoryLayer } | null {
   const slash = id.lastIndexOf('/')
   if (slash <= 0 || slash === id.length - 1) return null
   const group = id.slice(0, slash)
   const name = id.slice(slash + 1)
+  if (!isValidGroupPath(group) || !isValidGroupSegment(name)) return null
   return { group, name, layer: layerOfGroup(group) }
 }
 

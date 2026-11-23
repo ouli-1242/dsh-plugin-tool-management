@@ -15,7 +15,8 @@
 
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join, posix } from 'node:path'
-import { GLOBAL_SCENE, MEMORIES_TRASH_DIR, WORKSPACE_GROUP_PREFIX, isValidGroupPath, type MemoryLayer } from '../memories/constants.js'
+import { GLOBAL_SCENE, MEMORIES_TRASH_DIR, WORKSPACE_GROUP_PREFIX, isValidGroupPath, isValidGroupSegment, type MemoryLayer } from '../memories/constants.js'
+import { isValidTrashId } from '../hub.js'
 import { parseSkillDoc } from '../skills/core.js'
 import { rewriteFrontmatterFields } from '../skills/frontmatter.js'
 import { newTrashId } from '../trash-id.js'
@@ -152,7 +153,7 @@ export async function trashAutoNote(autoRoot: string, stateDir: string, id: stri
   if (slash <= 0) return false
   const group = id.slice(0, slash)
   const name = id.slice(slash + 1)
-  if (!isValidGroupPath(group) || name === '') return false
+  if (!isValidGroupPath(group) || !isValidGroupSegment(name)) return false
   const src = join(autoRoot, group, `${name}.md`)
   if (!await exists(src)) return false
   const dir = join(stateDir, 'evolution', 'trash')
@@ -178,12 +179,15 @@ const trashDirOf = (stateDir: string, trashId: string): string => join(stateDir,
 
 /** 读一条自动记忆回收站条目；不是自动条目 / 损坏 / 不存在都返回 null。 */
 export async function readAutoTrashManifest(stateDir: string, trashId: string): Promise<AutoTrashManifest | null> {
+  // trashId 来自界面参数与回收站目录名：不校验就 `../../` 越出回收站根读任意 manifest.json。
+  if (!isValidTrashId(trashId)) return null
   try {
     const raw = JSON.parse(await readFile(join(trashDirOf(stateDir, trashId), 'manifest.json'), 'utf8'))
     if (!raw || raw.auto !== true) return null
     if (typeof raw.autoId !== 'string' || raw.autoId === '') return null
     if (typeof raw.group !== 'string' || !isValidGroupPath(raw.group)) return null
-    if (typeof raw.name !== 'string' || raw.name === '') return null
+    // name 会被拼回笔记库：与 id 解析同一套路径段校验，挡住 `..` 与分隔符。
+    if (typeof raw.name !== 'string' || !isValidGroupSegment(raw.name)) return null
     if (raw.autoLayer !== 'global' && raw.autoLayer !== 'workspace') return null
     return {
       group: raw.group,
@@ -235,7 +239,7 @@ export async function archiveAutoNote(
   if (slash <= 0) return null
   const group = id.slice(0, slash)
   const name = id.slice(slash + 1)
-  if (!isValidGroupPath(group) || name === '') return null
+  if (!isValidGroupPath(group) || !isValidGroupSegment(name)) return null
   const src = join(autoRoot, group, `${name}.md`)
   let text: string
   try {
@@ -307,6 +311,7 @@ export async function moveAutoNoteToTrash(
   const slash = id.lastIndexOf('/')
   const group = id.slice(0, slash)
   const name = id.slice(slash + 1)
+  if (!isValidGroupPath(group) || !isValidGroupSegment(name)) return null
   const src = join(autoRoot, group, `${name}.md`)
   try {
     await rm(src, { force: true })
@@ -344,6 +349,8 @@ export async function restoreAutoNoteFromTrash(
 
 /** 删掉一条自动回收站条目（恢复 / 永久删除后调用）。 */
 export async function dropAutoTrashEntry(stateDir: string, trashId: string): Promise<void> {
+  // 恢复路径的 trashId 已在 readAutoTrashManifest 校验过；这里兜直接调用方（永久删除）。
+  if (!isValidTrashId(trashId)) return
   await rm(trashDirOf(stateDir, trashId), { recursive: true, force: true })
 }
 
