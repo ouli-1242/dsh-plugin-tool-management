@@ -513,13 +513,15 @@
         // 界面这一份不属于当前层：说明上一个作用域的迟到回包刚覆盖过它。此时按它保存
         // 会把 A 对话的勾选写进 B 对话 —— 先重拉，让用户看到的和写下去的是同一份。
         if (sid && toolTable.sessionId && toolTable.sessionId !== sid) { loadToolTable(true); return }
+        // 保存也是一次“最新请求”：作废在途的读，避免读回包晚于保存回包把旧名单写回来。
+        const seq = ++toolTableSeq.current
         setToolTableBusy(true)
         setToolTableError(null)
         const payload = { set: true, hidden: names.slice() }
         if (sid) payload.sessionId = sid
         apiCall('tool-table', payload)
           .then(function (r) {
-            if (sid !== toolTableScopeRef.current) return
+            if (seq !== toolTableSeq.current || sid !== toolTableScopeRef.current) return
             if (r && r.ok && r.report) {
               setToolTable(toolTableFrom(r, names))
               // 会话层的工具表也是"这一层的覆盖"：顶部下拉的条数要跟着变。
@@ -532,7 +534,7 @@
             loadFeatures(true)
           })
           .catch(function () {
-            if (sid !== toolTableScopeRef.current) return
+            if (seq !== toolTableSeq.current || sid !== toolTableScopeRef.current) return
             setToolTableError(t('compat.tools.saveFailed'))
             loadToolTable(true)
           })
