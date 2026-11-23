@@ -124,13 +124,13 @@ export function isSourceInstall(): boolean {
 /**
  * peer range 与已验证版本。
  *
- * 官方全程走 prerelease 渠道（x.y.z-rc.N），而 semver 有一条硬规则：**带 prerelease 标签的
- * 版本，只有在"同 [major,minor,patch] 元组"的比较器也带 prerelease 标签时才能匹配**。所以
- * `>=0.2.1-rc.5` 匹配不了 `0.2.2-rc.2`，`^0.2.1-rc.5` 也匹配不了它 —— 范围只能**逐段写**，
- * 一代一段。
+ * 官方预发布走 `x.y.z-alpha.N` / `x.y.z-rc.N` 渠道，而 semver 有一条硬规则：**带 prerelease
+ * 标签的版本，只有在"同 [major,minor,patch] 元组"的比较器也带 prerelease 标签时才能匹配**。
+ * 所以 `>=0.2.2-rc.2` 匹配不了 `0.2.3-alpha.2`，`^0.2.2-rc.2` 也匹配不了它 —— 范围只能
+ * **逐段写**，一代一段。
  *
- * 但「逐段写」不等于「把历史各代累积起来」。累积成 `0.2.0 || 0.2.1 || 0.2.2` 三代并集，
- * 等于向 npm 声明「支持 0.2.0 起的每一代」。而本插件的代码只按 0.2.2 的契约写过
+ * 但「逐段写」不等于「把历史各代累积起来」。累积成 `0.2.1 || 0.2.2 || 0.2.3` 三代并集，
+ * 等于向 npm 声明「支持 0.2.1 起的每一代」。而本插件的代码只按 0.2.3 的契约写过
  * （工具准入、Session Projection 注册、子代理创建语义这几处都动过会静默改行为的语义），
  * 在 0.2.1 及更早的宿主上从未验证。那种声明最坏的后果不是"装不上"，而是"装上了、大部分能用、
  * 某几个动作悄悄失效"—— 用户无法判断是插件问题还是版本问题。
@@ -139,7 +139,7 @@ export function isSourceInstall(): boolean {
  * 对应版本即可（`dsh plugin add dsh-plugin-tool-management@<老版本号>`）。装上被拒 + 一版新适配，
  * 优于装上然后部分功能悄悄失效。
  *
- * 上界**必须写**（`<0.2.3`）：`^` 不能用 —— 它把上界放宽到 `<0.3.0`，等于声明 0.2.3 起的下一代
+ * 上界**必须写**（`<0.2.4`）：`^` 不能用 —— 它把上界放宽到 `<0.3.0`，等于声明 0.2.4 起的下一代
  * 也受支持，而跨 minor 的契约变化正是这个范围要挡的东西。
  *
  * 三处（本文件的常量、`package.json` 的 `engines.dsh`、11 个 peer）是**同一个字符串**，
@@ -147,36 +147,34 @@ export function isSourceInstall(): boolean {
  * 校验的范围"各说各话，而两者都自称是插件的兼容范围。同一条断言现在还钉住「只有一段」，
  * 防止范围再被追加成多代并集。
  *
- * 下界写在 `0.2.2-rc.2`、比这一代最早的 rc 高，是**适配声明**而不是 semver 的要求：同元组内
- * 的 rc 本来就被一个分支覆盖（`docs/HOST-ADAPT.md` §2.2）。本插件只实现 rc.2 的子代理激活
- * 形状（任务字段平铺在顶层，见 `src/subagents/run-provider.ts`），rc.1 要求把它们嵌在
- * `request` 里，装在 rc.1 上会在子代理激活处直接失败。抬下界让安装期就把 rc.1 拒掉，
- * 而不是装上之后部分功能悄悄失效；rc.1 用户留在声明旧范围的已发布插件版本（版本号见 README）。
+ * 下界写在 `0.2.3-alpha.2`，是**适配声明**而不是 semver 的要求：同元组内的 alpha / rc 本来
+ * 就被一个分支覆盖（`docs/HOST-ADAPT.md` §2.2）。本插件只对 alpha.2 的宿主契约做过静态对拍；
+ * 更早的 alpha.1 没验证过，抬下界让安装期直接拒掉，而不是装上之后部分功能悄悄失效。更早的
+ * 宿主用户留在声明旧范围的已发布插件版本（版本号见 README）。
  *
- * 已知且**无法**用 range 消除的缺口（如实标注）：尚未枚举的新 rc 元组（如 `0.2.3-rc.1`）
+ * 已知且**无法**用 range 消除的缺口（如实标注）：尚未枚举的新元组（如 `0.2.4-rc.1`）
  * 在 npm7+ 下会触发 ERESOLVE 告警。这不是写法问题 —— semver 规则决定了不存在能匹配
  * "任意未来 prerelease"的 range。缓解方式：官方跨代时同步改这一段（同时改
  * `VERIFIED_HOST_VERSION`），以及 `--legacy-peer-deps` 这条逃生门。
  *
- * 0.2.2-rc.2 的验证依据：把 rc.1 → rc.2 的包逐份对拍（工作区登记表、会话、投影缓存、设置、
- * 文件服务、预设名册、工具服务、连接准入、子代理 provider），本插件伸手要的成员一个没少。
- * 两处契约变了：子代理运行时撤掉了 provider 名册枚举（只剩按名查），激活请求把任务字段从
- * `request` 挪到顶层 —— 本插件按新形状实现，不再提供 rc.1 的嵌套形状。官方还撤下了 office
- * 的三个**操作**技能（渲染 / 换算 / 重算改由原生工具承担），技能页整目录拷贝官方 assets，
- * 名单随之变化 —— 本插件不写死技能名，无须跟着改。其余契约逐条比对无漂移。
+ * 0.2.3-alpha.2 的验证依据（静态）：doctor 的身份 / 能力 / 行为 / 客户端契约探针通过；11 个
+ * peer 包的公开导出一个不少（dsh-llm 撤下 `assertUsableApiKey`、dsh-session 撤下
+ * `SessionForkErrorCode`，本插件都没用）；补丁方言仍由 `parsePatchList` 断言顶层数组与每项
+ * 映射。真机功能验证不在静态探针的覆盖范围内，这一版以构建与上述静态结论为准。
  */
-export const EXPECTED_PEER_RANGE = '>=0.2.2-rc.2 <0.2.3'
+export const EXPECTED_PEER_RANGE = '>=0.2.3-alpha.2 <0.2.4'
 /**
- * peer range 的下界。仍从 EXPECTED_PEER_RANGE 派生，避免两处手写漂移。
+ * peer range 的下界。用 `semver.minVersion` 从 EXPECTED_PEER_RANGE 派生，避免两处手写漂移；
+ * 手写正则只认 `-rc.N`，遇到 `-alpha.N` 会漏掉预发布段，退化成整代版本号。
  *
  * 它取的是范围的**下界**，与 `VERIFIED_HOST_VERSION`（最后验证过的那一版）不是同一件事：
- * 下界是「这一代里最早能装的一版」，基准是「最近一次对着验证的一版」。同一代内追加 rc 时
- * 基准前移、范围不动 —— 因为预发布只在同元组内比较，追加的 rc 本来就落在范围里
+ * 下界是「这一代里最早能装的一版」，基准是「最近一次对着验证的一版」。同一代内追加 alpha / rc 时
+ * 基准前移、范围不动 —— 因为预发布只在同元组内比较，追加的预发布本来就落在范围里
  * （见 `docs/HOST-ADAPT.md` §2.2 与 §3.4）。保留这个导出是因为它进了 `compat-status`
  * 的载荷，doctor 与外部脚本可能仍在读；语义仍是"最早支持哪一代"。
  */
 export const EXPECTED_MIN_HOST_VERSION =
-  EXPECTED_PEER_RANGE.match(/(\d+\.\d+\.\d+(?:-rc\.\d+)?)/)?.[1] ?? VERIFIED_HOST_VERSION
+  semver.minVersion(EXPECTED_PEER_RANGE)?.version ?? VERIFIED_HOST_VERSION
 
 /** 一条逐包版本基准：包名、插件声明的 peer 范围、适配时验证过的版本。 */
 export interface HostPackageBaseline {
@@ -243,7 +241,7 @@ const OBSERVED_HOST_PACKAGES = [
 ] as const
 
 export const HOST_PACKAGE_BASELINES: readonly HostPackageBaseline[] = [
-  { name: '@deepseek-ai/cordis', peerRange: '^4.0.2', baselineVersion: '4.1.0' },
+  { name: '@deepseek-ai/cordis', peerRange: '~4.2.0-alpha.1', baselineVersion: '4.2.0-alpha.1' },
   ...DSH_PEER_PACKAGES.map((name) => ({
     name,
     peerRange: EXPECTED_PEER_RANGE,
