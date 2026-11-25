@@ -7,13 +7,15 @@
 #   - 恢复通过 → 自动关闭该 issue。
 #
 # 宿主版本怎么挑：**不跟 npm 的 `latest` 标签**。`latest` 是官方推荐给最终用户的那一版，
-# 而插件适配的常常是刚发到 `next` 的下一代 —— 拿旧宿主去量新代码，host-deps 会报 SKEW
+# 而插件适配的常常是刚发到 `next` / `alpha` 的下一代 —— 拿旧宿主去量新代码，host-deps 会报 SKEW
 # 直接红，红得没有信息量（0.2.2-rc.1 那一代就是这样）。
-# 现在按 `package.json` 的 `engines.dsh` 解析：取**已发布版本里最新的非预览版**
-# （排除 alpha / beta，它们的版本号大概率超出当前范围，天天红没有信息量），
-#   - 落在声明范围内 → 装它，跑全套检查；
-#   - 落在范围外 → 失败，这才是「官方发了新一代，该适配了」的信号。
-# 想提前看 alpha 或钉某一版，用 workflow_dispatch 的 version 输入。
+# 现在按 `package.json` 的 `engines.dsh` 解析：取**已发布版本里满足该范围的最新版**。
+# 不先按 alpha / beta 粗筛：范围本身已经写明哪些预览版可接受（npm 默认语义下，预发布
+# 只有在范围里同元组写了预发布比较器时才命中），再叠一层粗筛会与范围自相矛盾 ——
+# 插件适配 0.2.3-alpha.2 时，夜间就永远摘不到声明的目标版本。
+#   - 有版本命中范围 → 装其中最新的，跑全套检查；
+#   - 没有任何版本命中 → 失败，这才是「官方发了新一代，该适配了」的信号。
+# 想钉某一版，用 workflow_dispatch 的 version 输入。
 #
 # 跑在 windows-latest：本插件的主战场是桌面 Windows，契约测试里也有依赖 Windows 临时
 # 目录可读性的用例（Linux runner 的 /tmp 下有不可读目录，会误报）。bash 步骤统一用
@@ -78,29 +80,25 @@ jobs:
               exit 1
             fi
             # 解析失败时把原因写进 doctor.txt —— 报告失败的步骤只读这个文件。
+            # satisfies 用 npm 默认语义（不带 includePrerelease）：预发布只有范围里同元组
+            # 写了预发布比较器时才命中，与真实安装行为一致。
             VERSION=$(VERSIONS_JSON="$PREFIX/versions.json" node -e '
               import { readFileSync } from "node:fs"
               import semver from "semver"
               const range = JSON.parse(readFileSync("package.json", "utf8")).engines.dsh
               const raw = JSON.parse(readFileSync(process.env.VERSIONS_JSON, "utf8"))
               const all = Array.isArray(raw) ? raw : [raw]
-              const preview = (v) => (semver.prerelease(v) || []).some((p) => p === "alpha" || p === "beta")
-              const usable = all.filter((v) => semver.valid(v) && !preview(v))
-              const newest = usable.slice().sort(semver.rcompare)[0]
-              const matching = usable.filter((v) => semver.satisfies(v, range))
-              if (newest === undefined) {
-                console.error("[canary] npm 上没有可用的非预览宿主版本")
-                process.exit(3)
-              }
-              if (!semver.satisfies(newest, range)) {
+              const valid = all.filter((v) => semver.valid(v))
+              const matching = valid.filter((v) => semver.satisfies(v, range))
+              if (matching.length === 0) {
+                const newest = valid.slice().sort(semver.rcompare)[0] ?? "(无)"
                 console.error(
-                  `[canary] 最新的非预览宿主 ${newest} 不在插件声明的 \`${range}\` 内。` +
-                  `本代可用版本：${matching.join(", ") || "(无)"}。` +
+                  `[canary] 已发布的宿主版本中没有满足插件声明的 \`${range}\` 的版本（npm 最新：${newest}）。` +
                   "若这是官方新一代，先按 AGENTS.md「适配新一代宿主」改范围；若只是发布顺序问题，忽略本行。",
                 )
                 process.exit(3)
               }
-              console.log(newest)
+              console.log(matching.sort(semver.rcompare)[0])
             ' 2>"$PREFIX/resolve-error.txt") || {
               { echo '宿主版本解析失败：'; cat "$PREFIX/resolve-error.txt"; } > doctor.txt
               exit 1
@@ -159,7 +157,7 @@ jobs:
           set -euo pipefail
           SIG=$( { tail -60 doctor.txt 2>/dev/null || echo 'no doctor output'; } | sha256sum | cut -c1-12)
           BODY=$(printf 'DSH `%s` (declared range `%s`) canary failed.\n\nRun: %s\n\n```\n%s\n```\n\nsig: %s\n' \
-            "${{ steps.host.outputs.version }}" "${{ steps.host.outputs.range }}" "$RUN_URL" \
+            "${{ steps.host.outputs.version || 'unresolved' }}" "${{ steps.host.outputs.range }}" "$RUN_URL" \
             "$(tail -80 doctor.txt 2>/dev/null || echo 'no doctor output (an earlier step failed)')" \
             "$SIG")
           NUM=$(gh issue list --state open --limit 100 --json number,title \
